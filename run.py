@@ -122,39 +122,30 @@ def stage_market(date: str, force: bool = False):
 #  STAGE: script-init
 # ════════════════════════════════════════════════════
 def stage_script_init(date: str):
-    print(f"\n▶ [script-init] 스크립트 템플릿 생성")
+    print(f"\n\u25b6 [script-init] \uc2a4\ud06c\ub9bd\ud2b8 \ud15c\ud50c\ub9bf \uc0dd\uc131")
     market_summary, movers = _load_market(date)
+
+    if not movers.get("gainers"):
+        print("  \u274c \uc2dc\uc7a5 \ub370\uc774\ud130 \uc5c6\uc74c. \uba3c\uc800 --stage market \uc2e4\ud589\ud558\uc138\uc694.")
+        return
 
     out = _script_path(date)
     generate_script_template(date, market_summary, movers, out)
 
-    print(f"\n  ✅ 템플릿 저장: {out}")
-    print("\n  ── 다음 단계 안내 ──────────────────────────────")
-    print("  1. 위 파일을 열어 빈 문자열 필드를 채워주세요.")
-    print("  2. 아래 프롬프트를 Claude/ChatGPT 웹에 붙여넣으면 됩니다:")
+    print(f"\n  \u2705 \ud15c\ud50c\ub9bf \uc800\uc7a5: {out}")
+    print("\n  \u2500 \ub2e4\uc74c \ub2e8\uacc4 \uc548\ub0b4 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
+    print("  1. \uc544\ub798 \ud504\ub86c\ud504\ud2b8\ub97c Claude/ChatGPT \uc6f9\uc5d0 \ubd99\uc5ec\ub123\uc73c\uc138\uc694.")
+    print("  2. AI\uc758 \uc751\ub2f5(JSON)\uc744 \ubcf5\uc0ac\ud574 script.json\uc744 \ub36e\uc5b4\uc4f0\uc138\uc694.")
+    print("  3. python run.py --stage tts \ub85c \ub2e4\uc74c \ub2e8\uacc4\ub97c \uc9c4\ud589\ud558\uc138\uc694.")
     print()
 
-    with open(out, encoding="utf-8") as f:
-        content = f.read()
-
-    prompt = f"""아래 JSON 파일에서 빈 문자열("")로 표시된 필드만 채워주세요.
-_로 시작하는 필드는 참고용 정보입니다.
-
-말투 규칙:
-- 경어체 유지 (합니다/습니다)
-- 문장 짧고 리듬감 있게
-- "살펴보겠습니다" 대신 "알아볼게요"
-- 수치를 문장 앞에 배치
-- reason은 30자 이내 한 문장
-- 마무리 멘트는 "어제 시황 여기까지고요, 오늘도 좋은 투자 되세요!" 스타일
-
-{content}
-
-JSON만 출력해주세요."""
+    from stages.script_gen import _build_web_prompt
+    prompt = _build_web_prompt(out)
 
     print("=" * 60)
     print(prompt)
     print("=" * 60)
+
 
 
 # ════════════════════════════════════════════════════

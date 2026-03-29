@@ -6,7 +6,6 @@ from pathlib import Path
 import edge_tts
 import config
 
-# 스크립트 키 순서 = 영상 세그먼트 순서
 SEGMENT_KEYS = [
     "intro",
     "gainer_list_caption",
@@ -20,7 +19,6 @@ SEGMENT_KEYS = [
 def _extract_text(script: dict, key: str) -> str:
     val = script.get(key, "")
     if isinstance(val, dict):
-        # 개별 종목: reason 필드 사용
         return val.get("reason", "")
     return val
 
@@ -40,19 +38,22 @@ def generate_tts(text: str, out_path: Path) -> Path:
     return out_path
 
 
-def generate_all_tts(script: dict, audio_dir: Path) -> dict[str, Path]:
+def generate_all_tts(script: dict, audio_dir: Path,
+                     only: str | None = None) -> dict[str, Path]:
     """
-    스크립트 JSON → 세그먼트별 mp3 생성
-    반환: {key: Path}
+    only: 특정 세그먼트 키만 재생성할 때 사용 (예: "gainer_a")
     """
     audio_dir.mkdir(parents=True, exist_ok=True)
     audio_paths: dict[str, Path] = {}
+    keys = [only] if only else SEGMENT_KEYS
 
     for idx, key in enumerate(SEGMENT_KEYS):
-        text = _extract_text(script, key)
-        out  = audio_dir / f"{idx:02d}_{key}.mp3"
-        print(f"   TTS [{idx+1}/{len(SEGMENT_KEYS)}] {key}")
-        generate_tts(text, out)
+        out = audio_dir / f"{idx:02d}_{key}.mp3"
         audio_paths[key] = out
+        if key not in keys:
+            continue
+        text = _extract_text(script, key)
+        print(f"   TTS [{key}]: {text[:30]}...")
+        generate_tts(text, out)
 
     return audio_paths

@@ -78,7 +78,7 @@ def cleanup_intermediate(work_dir: Path) -> None:
         d = work_dir / name
         if d.exists():
             shutil.rmtree(d)
-    for name in ["concat.mp4","sped.mp4","concat_list.txt"]:
+    for name in ["concat.mp4","sped.mp4","with_bgm.mp4","concat_list.txt"]:
         f = work_dir / name
         if f.exists():
             f.unlink()

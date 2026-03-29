@@ -186,6 +186,36 @@ def _draw_sector_tag(draw: ImageDraw.ImageDraw,
 
 
 # ════════════════════════════════════════════════════
+#  순위 뱃지 (TOP 1 / 2 / 3)
+# ════════════════════════════════════════════════════
+def _draw_rank_badge(draw: ImageDraw.ImageDraw,
+                     rank: int, x: int, y: int, color: str) -> None:
+    """'TOP 1' 형태의 순위 뱃지"""
+    font  = _font(28, bold=True)
+    text  = f"TOP {rank}"
+    bb    = draw.textbbox((0, 0), text, font=font)
+    tw    = bb[2] - bb[0]
+    th    = bb[3] - bb[1]
+    px, py = 14, 8
+    bw = tw + px * 2
+    bh = th + py * 2
+    # 배경 채우기 (해당 색상 반투명)
+    r, g, b = _hex_to_rgb(color)
+    overlay = Image.new("RGBA", draw._image.size, (0, 0, 0, 0))
+    ov_d    = ImageDraw.Draw(overlay)
+    ov_d.rounded_rectangle(
+        [x, y, x + bw, y + bh],
+        radius=8, fill=(r, g, b, 180)
+    )
+    draw._image.paste(
+        Image.alpha_composite(draw._image.convert("RGBA"), overlay).convert("RGB"),
+        (0, 0)
+    )
+    # 텍스트
+    draw.text((x + px, y + py), text, font=font, fill=COLOR_WHITE)
+
+
+# ════════════════════════════════════════════════════
 #  도입부 / 마무리
 # ════════════════════════════════════════════════════
 def _date_overlay(bg_path: str, date: str, out_path: Path) -> Path:
@@ -257,12 +287,26 @@ def gen_list_card(is_gainer: bool, stocks: list[dict],
 
         row_mid = ry0 + row_h // 2
 
-        # 종목명 (좌측, PAD*2 안쪽)
-        name_y = row_mid - 62
+        # TOP 순위 배지
+        badge_font = _font(26, bold=True)
+        badge_text = f"TOP {i + 1}"
+        bb = draw.textbbox((0, 0), badge_text, font=badge_font)
+        bw = bb[2] - bb[0] + 24
+        bh = bb[3] - bb[1] + 12
+        badge_x, badge_y = PAD + 20, ry0 + 12
+        draw.rounded_rectangle(
+            [badge_x, badge_y, badge_x + bw, badge_y + bh],
+            radius=6, fill=color
+        )
+        draw.text((badge_x + 12, badge_y + 6), badge_text,
+                  font=badge_font, fill=COLOR_WHITE)
+
+        # 종목명 (배지 아래)
+        name_y = badge_y + bh + 10
         draw.text((PAD + 20, name_y), name, font=f_name, fill=COLOR_WHITE)
 
         # 섹터 태그 (종목명 아래)
-        _draw_sector_tag(draw, sector, PAD + 20, name_y + 68)
+        _draw_sector_tag(draw, sector, PAD + 20, name_y + 66)
 
         # 등락률 (우측, PAD*2 안쪽)
         pct_text = f"{sign}{change}%"

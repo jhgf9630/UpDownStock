@@ -5,17 +5,16 @@
 """
 from __future__ import annotations
 from pykrx import stock
+import pandas as pd
 
-# ── 정적 fallback 사전 (WICS 실패 시 사용) ──────────────
-# 주요 종목 티커 → 섹터명
+# ── 정적 fallback 사전 ───────────────────────────────
 STATIC_SECTOR_MAP: dict[str, str] = {
     # 반도체
     "005930": "반도체", "000660": "반도체", "058470": "반도체",
     "042700": "반도체", "091990": "반도체", "240810": "반도체",
     # 2차전지
     "006400": "2차전지", "373220": "2차전지", "247540": "2차전지",
-    "086520": "2차전지", "003670": "2차전지", "096770": "2차전지",
-    "305720": "2차전지", "2856S0": "2차전지",
+    "086520": "2차전지", "003670": "2차전지", "305720": "2차전지",
     # 자동차
     "005380": "자동차", "000270": "자동차", "012330": "자동차",
     "204320": "자동차", "011210": "자동차",
@@ -27,19 +26,19 @@ STATIC_SECTOR_MAP: dict[str, str] = {
     "293490": "IT플랫폼", "263750": "IT플랫폼",
     # 바이오/제약
     "068270": "바이오", "207940": "바이오", "128940": "바이오",
-    "326030": "바이오", "000100": "바이오", "302440": "바이오",
+    "326030": "바이오", "302440": "바이오",
     # 금융
     "105560": "금융",   "055550": "금융",   "086790": "금융",
-    "316140": "금융",   "139480": "금융",   "024110": "금융",
+    "316140": "금융",   "024110": "금융",   "138930": "금융",
     # 철강/소재
     "005490": "철강",   "004020": "철강",   "010130": "철강",
     # 에너지/화학
     "010950": "에너지", "011170": "화학",   "051910": "화학",
-    "096770": "에너지", "267250": "에너지",
-    # 건설/부동산
+    "096770": "에너지",
+    # 건설
     "000720": "건설",   "006360": "건설",   "047040": "건설",
     # 유통/소비
-    "139480": "유통",   "004170": "유통",   "023530": "유통",
+    "004170": "유통",   "023530": "유통",   "139480": "유통",
     # 엔터/미디어
     "035900": "엔터",   "041510": "엔터",   "352820": "엔터",
     "122870": "엔터",
@@ -49,24 +48,11 @@ STATIC_SECTOR_MAP: dict[str, str] = {
     "009540": "조선",   "010140": "조선",   "042660": "조선",
     # 통신
     "017670": "통신",   "030200": "통신",   "032640": "통신",
+    # 디스플레이
+    "034220": "디스플레이", "067160": "디스플레이",
 }
 
-# WICS 영문 → 한국어 섹터명 매핑
-WICS_KR: dict[str, str] = {
-    "Energy": "에너지",
-    "Materials": "소재",
-    "Industrials": "산업재",
-    "Consumer Discretionary": "경기소비재",
-    "Consumer Staples": "필수소비재",
-    "Health Care": "헬스케어",
-    "Financials": "금융",
-    "Information Technology": "IT",
-    "Communication Services": "통신서비스",
-    "Utilities": "유틸리티",
-    "Real Estate": "부동산",
-}
-
-# WICS 세부 업종 → 간결한 한국어 섹터명
+# WICS 세부 업종 → 한국어 섹터명
 WICS_DETAIL_KR: dict[str, str] = {
     "Semiconductors": "반도체",
     "Semiconductor Equipment": "반도체장비",
@@ -97,32 +83,80 @@ WICS_DETAIL_KR: dict[str, str] = {
     "Real Estate": "부동산",
     "Wireless Telecommunication": "통신",
     "Diversified Telecommunication": "통신",
-    "Trading Companies": "무역",
     "Batteries": "2차전지",
     "Display": "디스플레이",
 }
 
+WICS_BROAD_KR: dict[str, str] = {
+    "Energy": "에너지",
+    "Materials": "소재",
+    "Industrials": "산업재",
+    "Consumer Discretionary": "경기소비재",
+    "Consumer Staples": "필수소비재",
+    "Health Care": "헬스케어",
+    "Financials": "금융",
+    "Information Technology": "IT",
+    "Communication Services": "통신서비스",
+    "Utilities": "유틸리티",
+    "Real Estate": "부동산",
+}
 
-def _fetch_wics(date: str, market: str) -> dict[str, str]:
-    """pykrx WICS 섹터 분류 조회 → {ticker: sector_kr}"""
+
+def _safe_wics(date: str, market: str) -> dict[str, str]:
+    """
+    WICS 섹터 조회. pykrx 버전 이슈로 실패할 수 있으므로
+    모든 예외를 잡아 빈 딕셔너리 반환.
+    """
     try:
         df = stock.get_market_sector_classifications(date, market)
-        if df is None or df.empty:
+        if df is None or (hasattr(df, "empty") and df.empty):
             return {}
 
         result: dict[str, str] = {}
+
+        # 실제 컬럼 확인 후 처리
+        cols = df.columns.tolist() if hasattr(df, "columns") else []
+
+        # 티커 컬럼 후보
+        ticker_col = None
+        for c in ["티커", "종목코드", "Symbol", "Ticker"]:
+            if c in cols:
+                ticker_col = c
+                break
+
+        # 업종명 컬럼 후보
+        sector_col = None
+        for c in ["SEC_NM_KOR", "업종명", "섹터", "Sector"]:
+            if c in cols:
+                sector_col = c
+                break
+
+        broad_col = None
+        for c in ["IDX_NM_KOR", "대분류", "Industry"]:
+            if c in cols:
+                broad_col = c
+                break
+
+        if ticker_col is None or sector_col is None:
+            return {}
+
         for _, row in df.iterrows():
-            ticker = str(row.get("티커") or row.get("종목코드") or "").strip()
-            # 세부 업종 우선, 없으면 대분류
-            detail = str(row.get("SEC_NM_KOR") or row.get("업종명") or "").strip()
-            broad  = str(row.get("IDX_NM_KOR") or "").strip()
+            ticker = str(row.get(ticker_col, "")).strip()
+            detail = str(row.get(sector_col, "")).strip()
+            broad  = str(row.get(broad_col, "")) if broad_col else ""
 
-            sector_kr = WICS_DETAIL_KR.get(detail) or detail or \
-                        WICS_KR.get(broad) or broad or "기타"
-
+            sector_kr = (
+                WICS_DETAIL_KR.get(detail)
+                or detail
+                or WICS_BROAD_KR.get(broad)
+                or broad
+                or "기타"
+            )
             if ticker:
                 result[ticker] = sector_kr
+
         return result
+
     except Exception as e:
         print(f"   [sector] WICS 조회 실패 ({market}): {e}")
         return {}
@@ -131,21 +165,24 @@ def _fetch_wics(date: str, market: str) -> dict[str, str]:
 def build_sector_map(date: str) -> dict[str, str]:
     """
     KOSPI + KOSDAQ 전체 섹터 맵 반환.
-    {ticker: sector_kr}
+    WICS 실패 시 정적 사전만 사용.
     """
     sector_map: dict[str, str] = {}
-
     for market in ("KOSPI", "KOSDAQ"):
-        wics = _fetch_wics(date, market)
+        wics = _safe_wics(date, market)
         sector_map.update(wics)
+
+    if not sector_map:
+        print("   [sector] WICS 전체 실패 → 정적 사전 사용")
 
     return sector_map
 
 
 def get_sector(ticker: str, sector_map: dict[str, str]) -> str:
     """
-    개별 종목 섹터 반환.
-    1순위: sector_map (WICS), 2순위: 정적 사전, 3순위: "기타"
+    1순위: WICS 맵
+    2순위: 정적 사전
+    3순위: "기타"
     """
     return (
         sector_map.get(ticker)

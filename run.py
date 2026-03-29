@@ -47,22 +47,35 @@ def _script_path(date: str) -> Path:
 
 
 # ── 시장 데이터 로드 (캐시 우선) ─────────────────────
-def _load_market(date: str) -> tuple[dict, dict]:
+def _load_market(date: str, force: bool = False) -> tuple[dict, dict]:
     cache = _market_cache_path(date)
-    if cache.exists():
+
+    # 캐시가 있고 강제 재수집이 아닌 경우 → 캐시 유효성 검사 후 사용
+    if cache.exists() and not force:
         with open(cache, encoding="utf-8") as f:
             data = json.load(f)
-        print(f"   캐시 사용: {cache}")
-        return data["market_summary"], data["movers"]
+        movers = data.get("movers", {})
+        # 캐시가 빈 결과면 무시하고 재수집
+        if movers.get("gainers") and movers.get("losers"):
+            print(f"   캐시 사용: {cache}")
+            return data["market_summary"], movers
+        else:
+            print("   캐시가 비어 있어 재수집합니다...")
 
     print("   시장 데이터 수집 중...")
     market_summary = get_market_summary(date)
     movers         = get_top_movers(date)
 
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    with open(cache, "w", encoding="utf-8") as f:
-        json.dump({"market_summary": market_summary, "movers": movers},
-                  f, ensure_ascii=False, indent=2)
+    # 결과가 있을 때만 캐시 저장
+    if movers.get("gainers") and movers.get("losers"):
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        with open(cache, "w", encoding="utf-8") as f:
+            json.dump({"market_summary": market_summary, "movers": movers},
+                      f, ensure_ascii=False, indent=2)
+        print(f"   캐시 저장: {cache}")
+    else:
+        print("   ⚠️  데이터 수집 실패 — 캐시 저장 생략")
+
     return market_summary, movers
 
 
@@ -85,21 +98,24 @@ def _image_paths(img_dir: Path) -> dict[str, Path]:
 # ════════════════════════════════════════════════════
 #  STAGE: market
 # ════════════════════════════════════════════════════
-def stage_market(date: str):
-    print(f"\n▶ [market] 기준 날짜: {date}")
-    market_summary, movers = _load_market(date)
+def stage_market(date: str, force: bool = False):
+    print(f"\n\u25b6 [market] \uae30\uc900 \ub0a0\uc9dc: {date}")
+    market_summary, movers = _load_market(date, force=force)
 
-    print(f"\n  시장: {market_summary['summary']}")
-    print("\n  급등주:")
-    for g in movers["gainers"]:
-        print(f"    {g['name']} ({g['sector']})  "
-              f"+{g['change']}%  {g['close']:,}원")
-    print("\n  급락주:")
-    for l in movers["losers"]:
-        print(f"    {l['name']} ({l['sector']})  "
-              f"{l['change']}%  {l['close']:,}원")
+    print(f"\n  \uc2dc\uc7a5: {market_summary['summary']}")
+    print("\n  \uae09\ub4f1\uc8fc:")
+    for g in movers.get("gainers", []):
+        print(f"    {g['name']} ({g['sector']})  +{g['change']}%  {g['close']:,}\uc6d0")
+    print("\n  \uae09\ub77d\uc8fc:")
+    for l in movers.get("losers", []):
+        print(f"    {l['name']} ({l['sector']})  {l['change']}%  {l['close']:,}\uc6d0")
 
-    print(f"\n  캐시 저장: {_market_cache_path(date)}")
+    if not movers.get("gainers"):
+        print()
+        print("  \u274c \ub370\uc774\ud130\uac00 \ube44\uc5b4 \uc788\uc2b5\ub2c8\ub2e4. \uc544\ub798\ub97c \ud655\uc778\ud558\uc138\uc694:")
+        print("     1. \ud574\ub2f9 \ub0a0\uc9dc\uac00 \uac70\ub798\uc77c\uc778\uc9c0 \ud655\uc778 (\uc8fc\ub9d0/\uacf5\ud734\uc77c \uc81c\uc678)")
+        print("     2. pykrx \ubc84\uc804: pip show pykrx")
+        print("     3. \ucf74\ub7fc \ub514\ubc84\uadf8: market_data.py\uc758 _normalize_ohlcv() \uc8fc\uc11d print \ud65c\uc131\ud654")
 
 
 # ════════════════════════════════════════════════════
@@ -289,13 +305,15 @@ def main():
     parser.add_argument("--date",    default=None, help="날짜 지정 (YYYYMMDD)")
     parser.add_argument("--segment", default=None,
                         help="특정 세그먼트만 (tts/image 단계에서 사용)")
+    parser.add_argument("--force", action="store_true",
+                        help="캐시 무시하고 재수집 (market 단계)")
     args = parser.parse_args()
 
     date = args.date or get_latest_trading_date()
     print(f"  기준 날짜: {date}")
 
     {
-        "market":      lambda: stage_market(date),
+        "market":      lambda: stage_market(date, force=args.force),
         "script-init": lambda: stage_script_init(date),
         "tts":         lambda: stage_tts(date, args.segment),
         "image":       lambda: stage_image(date, args.segment),

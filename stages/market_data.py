@@ -1,98 +1,90 @@
 """
-1단계: pykrx로 당일 급등/급락 TOP N 수집 + 섹터 정보 포함
-컬럼명을 동적으로 감지해 pykrx 버전 차이에 대응
+1단계: 네이버 금융 크롤링으로 급등/급락 TOP N 수집
+pykrx 버전 의존성 없이 안정적으로 동작
+
+사용 URL:
+  급등: https://finance.naver.com/sise/sise_rise.naver
+  급락: https://finance.naver.com/sise/sise_fall.naver
+  지수: https://finance.naver.com/sise/sise_index_day.naver?code=KOSPI / KOSDAQ
+  섹터: 종목 정보 페이지에서 업종 파싱
 """
 from __future__ import annotations
 
+import re
+import time
 from datetime import datetime, timedelta
 
-import pandas as pd
-from pykrx import stock
+import requests
+from bs4 import BeautifulSoup
+from pykrx import stock   # 차트 데이터(단일 종목)에만 사용
 
 import config
-from stages.sector import build_sector_map, get_sector
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Referer": "https://finance.naver.com/",
+    "Accept-Language": "ko-KR,ko;q=0.9",
+}
+
+SESSION = requests.Session()
+SESSION.headers.update(HEADERS)
 
 
+# ── 최근 거래일 ──────────────────────────────────────
 def get_latest_trading_date() -> str:
-    """가장 최근 거래일을 YYYYMMDD 문자열로 반환."""
+    """
+    네이버 금융 급등 페이지에서 날짜를 읽거나,
+    pykrx 단일 종목 조회로 가장 최근 거래일 탐색.
+    """
     for i in range(10):
-        d = datetime.now() - timedelta(days=i)
-        date_str = d.strftime("%Y%m%d")
+        d = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
         try:
-            df = stock.get_market_ohlcv_by_date(date_str, date_str, "005930")
+            df = stock.get_market_ohlcv_by_date(d, d, "005930")
             if not df.empty:
-                return date_str
+                return d
         except Exception:
             continue
     return datetime.now().strftime("%Y%m%d")
 
 
-# ── 컬럼명 유틸 ──────────────────────────────────────
-def _find_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    """후보 컬럼명 중 df에 실제로 있는 첫 번째를 반환"""
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
-
-
-def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame | None:
-    """
-    pykrx 버전별 컬럼명 차이를 '종가', '거래량', '등락률'로 통일.
-    실패 시 None 반환.
-    """
-    if df is None or df.empty:
-        return None
-
-    col_map = {
-        "종가":   ["종가", "Close", "close", "Adj Close"],
-        "거래량": ["거래량", "Volume", "volume"],
-        "등락률": ["등락률", "변동률", "등락율", "Change", "changes", "ChagesRatio"],
-    }
-
-    rename = {}
-    for target, candidates in col_map.items():
-        if target in df.columns:
-            continue
-        found = _find_col(df, candidates)
-        if found:
-            rename[found] = target
-
-    if rename:
-        df = df.rename(columns=rename)
-
-    required = ["종가", "거래량", "등락률"]
-    missing  = [c for c in required if c not in df.columns]
-    if missing:
-        print(f"   [market_data] 컬럼 매핑 실패. 누락: {missing}")
-        print(f"   [market_data] 실제 컬럼 목록: {df.columns.tolist()}")
-        return None
-
-    return df
-
-
-# ── 시장 지수 요약 ───────────────────────────────────
+# ── 지수 등락률 ──────────────────────────────────────
 def get_market_summary(date: str) -> dict:
-    """코스피·코스닥 당일 등락률 반환"""
-    def _change(index_code: str) -> float:
+    """코스피·코스닥 당일 등락률 — 네이버 금융 크롤링"""
+    def _fetch(code: str) -> float:
+        url = f"https://finance.naver.com/sise/sise_index_day.naver?code={code}"
         try:
-            df = stock.get_index_ohlcv_by_date(date, date, index_code)
-            if df is None or df.empty:
-                return 0.0
-            rate_col  = _find_col(df, ["등락률", "변동률", "등락율"])
-            close_col = _find_col(df, ["종가", "Close"])
-            if rate_col:
-                return round(float(df[rate_col].iloc[-1]), 2)
-            if close_col and len(df) >= 2:
-                prev = float(df[close_col].iloc[-2])
-                curr = float(df[close_col].iloc[-1])
-                return round((curr - prev) / prev * 100, 2) if prev else 0.0
+            resp = SESSION.get(url, timeout=10)
+            soup = BeautifulSoup(resp.text, "html.parser")
+            rows = soup.select("table.type_1 tr")
+            for row in rows:
+                cols = row.select("td")
+                if len(cols) >= 5:
+                    # 날짜 셀이 첫 번째
+                    date_text = cols[0].get_text(strip=True).replace(".", "")
+                    date_text = re.sub(r"\D", "", date_text)
+                    change_text = cols[4].get_text(strip=True)   # 전일비%
+                    change_text = re.sub(r"[^0-9.\-]", "", change_text)
+                    if change_text:
+                        val = float(change_text)
+                        # 등락 방향은 이미지 alt로 판단
+                        img = cols[3].select_one("img")
+                        if img:
+                            alt = img.get("alt", "")
+                            if "하락" in alt or "fall" in alt.lower():
+                                val = -abs(val)
+                            else:
+                                val = abs(val)
+                        return round(val, 2)
         except Exception as e:
-            print(f"   [market_data] 지수 조회 오류 ({index_code}): {e}")
+            print(f"   [market_data] 지수 크롤링 오류 ({code}): {e}")
         return 0.0
 
-    kospi  = _change("1001")
-    kosdaq = _change("2001")
+    kospi  = _fetch("KOSPI")
+    kosdaq = _fetch("KOSDAQ")
 
     def fmt(v):
         return f"{'+' if v >= 0 else ''}{v}%"
@@ -104,84 +96,152 @@ def get_market_summary(date: str) -> dict:
     }
 
 
-# ── 급등/급락 TOP N ──────────────────────────────────
-def get_top_movers(date: str) -> dict:
-    """
-    KOSPI + KOSDAQ 전 종목 조회 → 급등/급락 TOP N 반환.
-    각 종목에 sector 필드 포함.
-    """
-    print("   섹터 데이터 로딩...")
-    sector_map = build_sector_map(date)
+# ── 섹터 조회 ────────────────────────────────────────
+def get_sector(ticker: str) -> str:
+    """네이버 금융 종목 정보 페이지에서 업종 파싱"""
+    from stages.sector import STATIC_SECTOR_MAP
+    # 정적 사전 우선 (빠름)
+    if ticker in STATIC_SECTOR_MAP:
+        return STATIC_SECTOR_MAP[ticker]
+    # 네이버 금융 업종 파싱
+    try:
+        url  = f"https://finance.naver.com/item/coinfo.naver?code={ticker}"
+        resp = SESSION.get(url, timeout=8)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        # 업종 텍스트 위치: table.coinfo_table1 > th[업종] 옆 td
+        for row in soup.select("table.coinfo_table1 tr"):
+            th = row.select_one("th")
+            td = row.select_one("td")
+            if th and td and "업종" in th.get_text():
+                sector = td.get_text(strip=True)
+                return _simplify_sector(sector)
+    except Exception:
+        pass
+    return "기타"
 
-    frames: list[pd.DataFrame] = []
-    name_map: dict[str, str] = {}
 
-    for market in ("KOSPI", "KOSDAQ"):
-        try:
-            raw = stock.get_market_ohlcv_by_ticker(date, market=market)
-            df  = _normalize_ohlcv(raw)
-            if df is None:
+def _simplify_sector(raw: str) -> str:
+    """네이버 업종명 → 짧은 섹터명"""
+    MAP = {
+        "반도체": "반도체", "전기·전자": "전자", "자동차": "자동차",
+        "방산": "방산", "항공": "항공", "조선": "조선",
+        "화학": "화학", "철강": "철강", "건설": "건설",
+        "바이오": "바이오", "제약": "제약", "의약": "바이오",
+        "금융": "금융", "은행": "은행", "증권": "증권", "보험": "보험",
+        "통신": "통신", "미디어": "미디어", "엔터": "엔터",
+        "유통": "유통", "음식": "식품", "운송": "물류",
+        "에너지": "에너지", "전력": "전력", "2차전지": "2차전지",
+        "소프트웨어": "소프트웨어", "IT": "IT",
+    }
+    for key, val in MAP.items():
+        if key in raw:
+            return val
+    # 너무 길면 앞 4글자만
+    return raw[:4] if len(raw) > 6 else raw
+
+
+# ── 급등/급락 크롤링 ─────────────────────────────────
+def _parse_movers_page(url: str, top_n: int) -> list[dict]:
+    """
+    네이버 금융 급등/급락 페이지 파싱
+    반환: [{"ticker", "name", "change", "close"}, ...]
+    """
+    results = []
+    try:
+        resp = SESSION.get(url, timeout=10)
+        resp.encoding = "euc-kr"
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        rows = soup.select("table.type_2 tr")
+        for row in rows:
+            cols = row.select("td")
+            if len(cols) < 8:
                 continue
 
-            df = df[df["거래량"] > 50_000]
-            frames.append(df)
+            # 종목 링크에서 ticker 추출
+            link = row.select_one("a[href*='code=']")
+            if not link:
+                continue
+            href   = link.get("href", "")
+            ticker = re.search(r"code=(\d{6})", href)
+            if not ticker:
+                continue
+            ticker = ticker.group(1)
 
-            tickers = stock.get_market_ticker_list(date, market=market)
-            for t in tickers:
-                try:
-                    name_map[t] = stock.get_market_ticker_name(t)
-                except Exception:
-                    name_map[t] = t
+            name       = link.get_text(strip=True)
+            close_text = re.sub(r"[^0-9]", "", cols[1].get_text(strip=True))
+            pct_text   = re.sub(r"[^0-9.]", "", cols[5].get_text(strip=True))
 
-        except Exception as e:
-            print(f"   [market_data] {market} 조회 오류: {e}")
+            if not close_text or not pct_text:
+                continue
 
-    if not frames:
-        return {"gainers": [], "losers": []}
+            close  = int(close_text)
+            change = float(pct_text)
 
-    combined = pd.concat(frames)
-    combined = combined[combined["등락률"].notna()]
-    combined = combined[
-        (combined["등락률"] < 29.5) & (combined["등락률"] > -29.5)
-    ]
-    combined["종목명"] = combined.index.map(lambda x: name_map.get(x, x))
+            # 급락 페이지면 음수
+            if "sise_fall" in url:
+                change = -change
 
-    def _to_list(df: pd.DataFrame) -> list[dict]:
-        result = []
-        for ticker, row in df.iterrows():
-            result.append({
-                "ticker": str(ticker),
-                "name":   str(row.get("종목명", ticker)),
-                "change": round(float(row["등락률"]), 2),
-                "close":  int(row["종가"]),
-                "sector": get_sector(str(ticker), sector_map),
+            results.append({
+                "ticker": ticker,
+                "name":   name,
+                "change": change,
+                "close":  close,
             })
-        return result
 
-    gainers = combined.nlargest(config.TOP_N, "등락률")
-    losers  = combined.nsmallest(config.TOP_N, "등락률")
+            if len(results) >= top_n:
+                break
 
-    return {
-        "gainers": _to_list(gainers),
-        "losers":  _to_list(losers),
-    }
+    except Exception as e:
+        print(f"   [market_data] 크롤링 오류 ({url}): {e}")
+
+    return results
+
+
+def get_top_movers(date: str) -> dict:
+    """
+    네이버 금융 급등/급락 페이지 → TOP N 반환
+    각 종목에 sector 필드 포함
+    """
+    top_n = config.TOP_N
+
+    print("   급등주 크롤링...")
+    gainers_raw = _parse_movers_page(
+        "https://finance.naver.com/sise/sise_rise.naver", top_n
+    )
+
+    print("   급락주 크롤링...")
+    losers_raw = _parse_movers_page(
+        "https://finance.naver.com/sise/sise_fall.naver", top_n
+    )
+
+    def enrich(items: list[dict]) -> list[dict]:
+        enriched = []
+        for item in items:
+            time.sleep(0.2)   # 네이버 과부하 방지
+            item["sector"] = get_sector(item["ticker"])
+            enriched.append(item)
+        return enriched
+
+    print("   섹터 조회 중...")
+    gainers = enrich(gainers_raw)
+    losers  = enrich(losers_raw)
+
+    return {"gainers": gainers, "losers": losers}
 
 
 # ── 차트 데이터 ──────────────────────────────────────
-def get_chart_data(ticker: str, date: str) -> pd.DataFrame | None:
-    """최근 30일 일봉 데이터 반환 (차트용)."""
+def get_chart_data(ticker: str, date: str):
+    """
+    최근 30일 일봉 데이터 — pykrx 단일 종목 조회 (이건 정상 작동)
+    실패 시 None 반환
+    """
     try:
         start = (
             datetime.strptime(date, "%Y%m%d") - timedelta(days=30)
         ).strftime("%Y%m%d")
         df = stock.get_market_ohlcv_by_date(start, date, ticker)
-        if df is None or df.empty:
-            return None
-        if "종가" not in df.columns:
-            close_col = _find_col(df, ["Close", "close", "Adj Close"])
-            if close_col:
-                df = df.rename(columns={close_col: "종가"})
-        return df if "종가" in df.columns else None
+        return df if (df is not None and not df.empty) else None
     except Exception as e:
         print(f"   [market_data] 차트 데이터 오류 ({ticker}): {e}")
         return None

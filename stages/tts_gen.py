@@ -1,17 +1,13 @@
 """
-4단계: edge-tts CLI를 subprocess로 호출해 음성 생성
-asyncio를 전혀 사용하지 않아 Windows 모든 버전에서 안정적으로 동작.
-
-edge-tts 설치 시 'edge-tts' 커맨드라인 툴이 함께 설치되며,
-'python -m edge_tts' 로도 동일하게 호출 가능.
+4단계: gTTS(Google Text-to-Speech)로 음성 생성
+- asyncio 미사용 → Windows Microsoft Store Python 호환
+- 무료, 한국어 지원
+- pip install gtts
 """
 from __future__ import annotations
 
-import subprocess
-import sys
-import tempfile
-import os
 from pathlib import Path
+from gtts import gTTS
 
 import config
 
@@ -34,47 +30,12 @@ def _extract_text(script: dict, key: str) -> str:
 
 def generate_tts(text: str, out_path: Path) -> Path:
     """
-    edge-tts를 'python -m edge_tts' subprocess로 호출.
-    asyncio 이벤트 루프를 전혀 사용하지 않음.
-    텍스트를 임시 파일로 전달해 커맨드라인 인코딩 문제 방지.
+    gTTS로 mp3 생성.
+    slow=False: 기본 속도 (영상 합성 후 1.5배속 처리)
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # 텍스트를 임시 파일로 저장 (긴 텍스트 / 한글 인코딩 안전)
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", suffix=".txt", delete=False
-    ) as tmp:
-        tmp.write(text)
-        tmp_path = tmp.name
-
-    try:
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "edge_tts",
-                "--voice",       config.TTS_VOICE,
-                "--pitch",       config.TTS_PITCH,
-                "--text",        text,
-                "--write-media", str(out_path),
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=30,
-        )
-
-        if result.returncode != 0 or not out_path.exists():
-            err = result.stderr.strip()
-            raise RuntimeError(
-                f"edge-tts 실패 (returncode={result.returncode}): {err}"
-            )
-
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-
+    tts = gTTS(text=text, lang="ko", slow=False)
+    tts.save(str(out_path))
     return out_path
 
 

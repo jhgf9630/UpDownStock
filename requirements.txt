@@ -3,6 +3,6 @@ pykrx
 pandas
 matplotlib
 Pillow
-edge-tts
+gtts
 requests
 beautifulsoup4

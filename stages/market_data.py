@@ -156,7 +156,7 @@ def _parse_movers_page(url: str, is_gainer: bool, top_n: int) -> list[dict]:
 
     while len(results) < top_n:
         try:
-            paged_url = f"{url}&page={page}"
+            paged_url = f"{url}?page={page}"
             resp = SESSION.get(paged_url, timeout=10)
             resp.encoding = "euc-kr"
             soup = BeautifulSoup(resp.text, "html.parser")

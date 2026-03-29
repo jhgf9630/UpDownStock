@@ -20,7 +20,7 @@ def get_duration(audio_path: Path) -> float:
         return 3.0
 
 def make_clip(image_path: Path, audio_path: Path, out_path: Path) -> Path:
-    duration = get_duration(audio_path)
+    duration = get_duration(audio_path) + 0.4  # 오디오 끝 후 0.4초 여유
     subprocess.run([
         "ffmpeg","-y","-loop","1",
         "-i",str(image_path),"-i",str(audio_path),

@@ -200,22 +200,35 @@ def stage_image(date: str, segment: str | None = None):
             gen_outro(date, out)
 
         elif key == "gainer_list_caption":
-            gen_list_card(True, movers["gainers"],
+            # market.json 종목에 script.json 섹터 병합
+            enriched_gainers = [
+                {**movers["gainers"][i],
+                 "sector": script.get(f"gainer_{k}", {}).get("sector", "")}
+                for i, k in enumerate(["a", "b", "c"])
+            ]
+            gen_list_card(True, enriched_gainers,
                           script.get("gainer_list_caption", ""), out)
 
         elif key == "loser_list_caption":
-            gen_list_card(False, movers["losers"],
+            enriched_losers = [
+                {**movers["losers"][i],
+                 "sector": script.get(f"loser_{k}", {}).get("sector", "")}
+                for i, k in enumerate(["a", "b", "c"])
+            ]
+            gen_list_card(False, enriched_losers,
                           script.get("loser_list_caption", ""), out)
 
         elif key in gainer_map:
-            info = gainer_map[key]
+            info = {**gainer_map[key],
+                    "sector": script.get(key, {}).get("sector", "")}
             gen_chart_card(True, info,
                            script[key]["reason"],
                            get_chart_data(info["ticker"], date),
                            out)
 
         elif key in loser_map:
-            info = loser_map[key]
+            info = {**loser_map[key],
+                    "sector": script.get(key, {}).get("sector", "")}
             gen_chart_card(False, info,
                            script[key]["reason"],
                            get_chart_data(info["ticker"], date),

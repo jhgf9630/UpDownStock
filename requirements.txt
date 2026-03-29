@@ -4,3 +4,5 @@ pandas
 matplotlib
 Pillow
 edge-tts
+requests
+beautifulsoup4

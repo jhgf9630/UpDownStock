@@ -1,0 +1,24 @@
+# 환경변수
+.env
+
+# 출력 결과물
+output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# 에셋 (직접 추가)
+assets/fonts/*.ttf
+assets/bgm/*.mp3
+assets/templates/*.jpg
+assets/templates/*.png
+
+# 단, .gitkeep은 추적 유지
+!assets/fonts/.gitkeep
+!assets/bgm/.gitkeep
+!assets/templates/.gitkeep
+!output/.gitkeep

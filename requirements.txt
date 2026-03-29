@@ -1,0 +1,6 @@
+anthropic
+pykrx
+pandas
+matplotlib
+Pillow
+edge-tts

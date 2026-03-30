@@ -246,7 +246,7 @@ def stage_video(date: str):
 
     img_map = _image_paths(img_dir)
     aud_map = {
-        key: aud_dir / f"{idx:02d}_{key}.mp3"
+        key: aud_dir / f"{idx:02d}_{key}.wav"
         for idx, key in enumerate(SEGMENT_KEYS)
     }
 

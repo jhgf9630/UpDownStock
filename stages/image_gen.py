@@ -224,17 +224,43 @@ def _draw_sector_tag(draw: ImageDraw.ImageDraw,
 def _date_overlay(bg_path: str, date: str, out_path: Path) -> Path:
     img  = _load_bg(bg_path)
     draw = ImageDraw.Draw(img)
-    font = _font(54, bold=True)
+    font = _font(60, bold=True)
     date_fmt = datetime.strptime(date, "%Y%m%d").strftime("%Y. %m. %d")
     _draw_center_x(draw, date_fmt, int(H * 0.88), font, COLOR_WHITE)
     img.save(out_path, quality=95)
     return out_path
 
+def gen_announce_card(is_gainer: bool, out_path: Path) -> Path:
+    """
+    급등/급락 안내 전환 카드.
+    배경(gainer_bg / loser_bg) 위에 큰 텍스트만 표시.
+    TTS: "급등 내용입니다." / "급락 내용입니다."
+    """
+    bg    = config.GAINER_BG if is_gainer else config.LOSER_BG
+    color = COLOR_RISE if is_gainer else COLOR_FALL
+    text  = "📈 급등 종목" if is_gainer else "📉 급락 종목"
+ 
+    img  = _load_bg(bg)
+    draw = ImageDraw.Draw(img)
+    font = _font(100, bold=True)
+    th   = _text_h(draw, text, font)
+    y    = int((H - th) // 2)
+    _draw_center_x(draw, text, y, font, color)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out_path, quality=95)
+    return out_path
 
-def gen_intro(date: str, out_path: Path) -> Path:
-    return _date_overlay(config.INTRO_BG, date, out_path)
-
-
+def gen_intro(date: str, out_path: Path, market: str = "KOSPI") -> Path:
+    """
+    market: "KOSPI" → kospi_intro_bg.jpg
+             "KOSDAQ" → kosdaq_intro_bg.jpg
+    """
+    bg = (config.INTRO_BG_KOSDAQ
+          if market.upper() == "KOSDAQ"
+          else config.INTRO_BG_KOSPI)
+    return _date_overlay(bg, date, out_path)
+ 
+ 
 def gen_outro(date: str, out_path: Path) -> Path:
     return _date_overlay(config.OUTRO_BG, date, out_path)
 

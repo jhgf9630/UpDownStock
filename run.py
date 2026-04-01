@@ -26,8 +26,9 @@ from stages.market_data import (get_latest_trading_date, get_market_summary,
                                   get_top_movers, get_chart_data)
 from stages.script_gen  import (generate_script_template, generate_script_ai,
                                   load_script, get_market_script, _build_web_prompt)
-from stages.image_gen   import gen_intro, gen_outro, gen_list_card, gen_chart_card
-from stages.tts_gen     import generate_all_tts, SEGMENT_KEYS
+from stages.image_gen   import (gen_intro, gen_outro, gen_list_card,
+                                   gen_chart_card, gen_announce_card)
+from stages.tts_gen     import generate_all_tts, SEGMENT_KEYS, ANNOUNCE_IMAGE_MAP
 from stages.video_build import make_clip, build_video
 
 MARKETS = ["kospi", "kosdaq"]
@@ -60,15 +61,17 @@ def _script_path(date: str) -> Path:
 def _image_paths(img_dir: Path) -> dict[str, Path]:
     return {
         "intro":               img_dir / "00_intro.jpg",
-        "gainer_list_caption": img_dir / "01_gainer_list.jpg",
-        "gainer_a":            img_dir / "02_gainer_a.jpg",
-        "gainer_b":            img_dir / "03_gainer_b.jpg",
-        "gainer_c":            img_dir / "04_gainer_c.jpg",
-        "loser_list_caption":  img_dir / "05_loser_list.jpg",
-        "loser_a":             img_dir / "06_loser_a.jpg",
-        "loser_b":             img_dir / "07_loser_b.jpg",
-        "loser_c":             img_dir / "08_loser_c.jpg",
-        "outro":               img_dir / "09_outro.jpg",
+        "gainer_announce":     img_dir / "01_gainer_announce.jpg",
+        "gainer_list_caption": img_dir / "02_gainer_list.jpg",
+        "gainer_a":            img_dir / "03_gainer_a.jpg",
+        "gainer_b":            img_dir / "04_gainer_b.jpg",
+        "gainer_c":            img_dir / "05_gainer_c.jpg",
+        "loser_announce":      img_dir / "06_loser_announce.jpg",
+        "loser_list_caption":  img_dir / "07_loser_list.jpg",
+        "loser_a":             img_dir / "08_loser_a.jpg",
+        "loser_b":             img_dir / "09_loser_b.jpg",
+        "loser_c":             img_dir / "10_loser_c.jpg",
+        "outro":               img_dir / "11_outro.jpg",
     }
 
 
@@ -208,7 +211,11 @@ def stage_image(date: str, market: str | None = None,
             out = img_map[key]
 
             if key == "intro":
-                gen_intro(date, out)
+                gen_intro(date, out, market=mkt.upper())
+
+
+            elif key in ("gainer_announce", "loser_announce"):
+                gen_announce_card(key == "gainer_announce", out)
 
             elif key == "outro":
                 gen_outro(date, out)
@@ -272,7 +279,8 @@ def stage_video(date: str, market: str | None = None):
 
         missing = []
         for key in SEGMENT_KEYS:
-            if not img_map[key].exists():
+            # announce 세그먼트는 이미지 없음 — 체크 제외
+            if key not in ANNOUNCE_IMAGE_MAP and not img_map[key].exists():
                 missing.append(f"이미지 없음: {img_map[key].name}")
             if not aud_map[key].exists():
                 missing.append(f"오디오 없음: {aud_map[key].name}")
@@ -286,7 +294,12 @@ def stage_video(date: str, market: str | None = None):
         for idx, key in enumerate(SEGMENT_KEYS):
             clip_out = clip_dir / f"clip_{idx:02d}.mp4"
             print(f"   클립 [{idx+1}/{len(SEGMENT_KEYS)}] {key}")
-            make_clip(img_map[key], aud_map[key], clip_out)
+            # announce 세그먼트는 이미지 없음 → 해당 리스트 이미지 재사용
+            if key in ANNOUNCE_IMAGE_MAP:
+                img_key = ANNOUNCE_IMAGE_MAP[key]
+                make_clip(img_map[img_key], aud_map[key], clip_out)
+            else:
+                make_clip(img_map[key], aud_map[key], clip_out)
             clips.append(clip_out)
 
         bgm   = Path(config.BGM_PATH)

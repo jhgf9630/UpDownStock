@@ -214,6 +214,7 @@ def generate_script_template(date: str, market_summary: dict,
         "_안내": [
             "빈 문자열(\"\")만 채워주세요.",
             "키 이름/구조/순서 변경 금지.",
+            "_안내 부분은 출력하지 마세요.",
             "JSON만 출력 (마크다운/설명 금지).",
         ],
         "_날짜":          datetime.strptime(date, "%Y%m%d").strftime("%Y년 %m월 %d일"),

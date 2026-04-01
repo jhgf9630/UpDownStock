@@ -1,11 +1,16 @@
 """
-세그먼트별 이미지 생성 (1080x1920)
+세그먼트별 이미지 생성 (1080x1920) — 카드형 UI
 
 레이아웃:
-  [0~18%]   헤더
-  [20~35%]  자막
-  [37~90%]  미디어 박스
-  [91~100%] 하단 여백
+  [0~15%]   헤더 (상단 여백 확보, 폰트 살짝 축소)
+  [17~32%]  자막
+  [34~92%]  미디어 박스 (카드형)
+  [92~100%] 하단 여백
+
+textbbox 사용 원칙:
+  bbox = draw.textbbox((0,0), text, font=font)
+  tw = bbox[2] - bbox[0]   ← 반드시 인덱스로 int 추출
+  th = bbox[3] - bbox[1]
 """
 from __future__ import annotations
 
@@ -24,29 +29,40 @@ import config
 
 W, H = config.VIDEO_W, config.VIDEO_H
 
-COLOR_RISE   = "#FF3333"
-COLOR_FALL   = "#3366FF"
-COLOR_WHITE  = "#FFFFFF"
-COLOR_GRAY   = "#CCCCCC"
-COLOR_DARK   = "#999999"
-COLOR_BG     = "#0D0D0D"
-COLOR_TAG_BG = "#2A2A2A"
-COLOR_TAG_BD = "#FFD700"
-COLOR_TAG_FG = "#FFD700"
+# ── 색상 ─────────────────────────────────────────────
+COLOR_RISE    = "#FF4D4D"   # 코랄 레드 (급등)
+COLOR_FALL    = "#4D79FF"   # 소프트 블루 (급락)
+COLOR_WHITE   = "#FFFFFF"
+COLOR_GRAY    = "#CCCCCC"
+COLOR_DARK    = "#888888"
+COLOR_BG      = "#0D0D0D"
 
-# 좌우 여백: 리스트 콘텐츠가 가장자리에 너무 붙지 않도록
-LPAD = 100   # 왼쪽 여백 (종목명 시작점)
-RPAD = 100   # 오른쪽 여백 (등락률 끝점)
+# 카드
+CARD_BG       = "#1A1E2E"
+CARD_BORDER   = "#2A2F40"
+CARD_RADIUS   = 25
 
-H_TOP = config.HEADER_TOP
-H_BOT = config.HEADER_BOTTOM
-C_TOP = config.CAPTION_TOP
-C_BOT = config.CAPTION_BOTTOM
-M_TOP = config.MEDIA_TOP
-M_BOT = config.MEDIA_BOTTOM
+# 섹터 태그
+TAG_BG        = "#252A3A"
+TAG_BORDER    = "#FFD700"
+TAG_FG        = "#FFD700"
+
+# ── 여백 ─────────────────────────────────────────────
+LPAD = 85    # 화면 좌우 여백
+CARD_PAD = 32  # 카드 내부 좌우 패딩
+
+# ── 레이아웃 픽셀 ────────────────────────────────────
+H_TOP = int(H * 0.00)
+H_BOT = int(H * 0.15)
+C_TOP = int(H * 0.17)
+C_BOT = int(H * 0.32)
+M_TOP = int(H * 0.36)
+M_BOT = int(H * 0.90)
 
 
-# ── 폰트 ─────────────────────────────────────────────
+# ════════════════════════════════════════════════════
+#  폰트
+# ════════════════════════════════════════════════════
 def _find_font_path(bold: bool = False) -> str:
     cfg = config.FONT_BOLD if bold else config.FONT_REGULAR
     win = (["C:/Windows/Fonts/malgunbd.ttf",
@@ -75,7 +91,9 @@ def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default(size=max(size, 10))
 
 
-# ── 배경 ─────────────────────────────────────────────
+# ════════════════════════════════════════════════════
+#  배경
+# ════════════════════════════════════════════════════
 def _load_bg(path: str) -> Image.Image:
     p = Path(path)
     if p.exists():
@@ -86,32 +104,56 @@ def _load_bg(path: str) -> Image.Image:
     return Image.new("RGB", (W, H), COLOR_BG)
 
 
-# ── 텍스트 측정 ───────────────────────────────────────
-def _tw(draw: ImageDraw.ImageDraw, text: str, font) -> int:
-    bb = draw.textbbox((0, 0), text, font=font)
-    return bb[2] - bb[0]
+# ════════════════════════════════════════════════════
+#  텍스트 크기 측정 (항상 int 반환)
+# ════════════════════════════════════════════════════
+def _text_w(draw: ImageDraw.ImageDraw, text: str, font) -> int:
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return int(bbox[2] - bbox[0])   # ← tuple 인덱스로 int 추출
 
 
-def _th(draw: ImageDraw.ImageDraw, text: str, font) -> int:
-    bb = draw.textbbox((0, 0), text, font=font)
-    return bb[3] - bb[1]
+def _text_h(draw: ImageDraw.ImageDraw, text: str, font) -> int:
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return int(bbox[3] - bbox[1])
 
 
-# ── 수평 중앙 정렬 그리기 ─────────────────────────────
+# ════════════════════════════════════════════════════
+#  공통 그리기 헬퍼
+# ════════════════════════════════════════════════════
 def _draw_center_x(draw: ImageDraw.ImageDraw, text: str, y: int,
-                   font, color: str = COLOR_WHITE):
-    x = (W - _tw(draw, text, font)) // 2
+                   font, color: str = COLOR_WHITE) -> None:
+    """수평 중앙 정렬"""
+    tw = _text_w(draw, text, font)
+    x  = int((W - tw) // 2)
     draw.text((x, y), text, font=font, fill=color)
 
 
-# ── 단어 단위 / 절반 기준 줄바꿈 ─────────────────────
+def _draw_right(draw: ImageDraw.ImageDraw, text: str, y: int,
+                right_edge: int, font, color: str) -> None:
+    """오른쪽 정렬 (right_edge 기준)"""
+    tw = _text_w(draw, text, font)
+    x  = int(right_edge - tw)
+    draw.text((x, y), text, font=font, fill=color)
+
+
+# ════════════════════════════════════════════════════
+#  헤더 (상단 여백 확보, 폰트 살짝 축소 110→100)
+# ════════════════════════════════════════════════════
+def _draw_header(draw: ImageDraw.ImageDraw, is_gainer: bool) -> None:
+    text  = "어제의 급등주" if is_gainer else "어제의 급락주"
+    color = COLOR_RISE if is_gainer else COLOR_FALL
+    font  = _font(120, bold=True)   # 124 → 100 (답답함 해소)
+    th    = _text_h(draw, text, font)
+    y     = int(H_TOP + (H_BOT - H_TOP) // 2 - th // 2) + 30
+    _draw_center_x(draw, text, y, font, color)
+
+
+# ════════════════════════════════════════════════════
+#  자막 (단어 단위, 절반 기준 2줄)
+# ════════════════════════════════════════════════════
 def _word_wrap_half(text: str, font, max_w: int) -> list[str]:
-    """
-    텍스트가 max_w 이내면 한 줄 반환.
-    초과하면 전체 너비의 절반에 가장 가까운 단어 경계에서 분리.
-    """
     try:
-        total_w = font.getlength(text)
+        total_w = int(font.getlength(text))
     except Exception:
         total_w = len(text) * 20
 
@@ -122,8 +164,7 @@ def _word_wrap_half(text: str, font, max_w: int) -> list[str]:
     if len(words) <= 1:
         return [text]
 
-    best_idx  = 1
-    best_diff = float("inf")
+    best_idx, best_diff = 1, float("inf")
     acc = 0.0
     for i, word in enumerate(words):
         try:
@@ -142,54 +183,48 @@ def _word_wrap_half(text: str, font, max_w: int) -> list[str]:
     return [l for l in [line1, line2] if l]
 
 
-# ── 헤더 ─────────────────────────────────────────────
-def _draw_header(draw: ImageDraw.ImageDraw, is_gainer: bool):
-    text  = "어제의 급등주" if is_gainer else "어제의 급락주"
-    color = COLOR_RISE if is_gainer else COLOR_FALL
-    font  = _font(124, bold=True)
-    y     = H_TOP + (H_BOT - H_TOP) // 2 - 62
-    _draw_center_x(draw, text, y, font, color)
-
-
-# ── 자막 ─────────────────────────────────────────────
-def _draw_caption(draw: ImageDraw.ImageDraw, caption: str):
-    font   = _font(44)
+def _draw_caption(draw: ImageDraw.ImageDraw, caption: str) -> None:
+    font   = _font(45, bold=True)
     lines  = _word_wrap_half(caption, font, W - LPAD * 2)
     line_h = 58
-    total  = len(lines) * line_h
-    y0     = C_TOP + (C_BOT - C_TOP) // 2 - total // 2
+    total  = int(len(lines) * line_h)
+    y0     = int(C_TOP + (C_BOT - C_TOP) // 2 - total // 2) + 60
     for line in lines:
         _draw_center_x(draw, line, y0, font, COLOR_GRAY)
-        y0 += line_h
+        y0 += line_h + 10
 
 
-# ── 섹터 태그 (왼쪽 정렬) ────────────────────────────
+# ════════════════════════════════════════════════════
+#  섹터 태그
+# ════════════════════════════════════════════════════
 def _draw_sector_tag(draw: ImageDraw.ImageDraw,
-                     sector: str, font,
-                     x: int, y: int) -> tuple[int, int]:
-    """(bw, bh) 반환. 섹터 없으면 (0,0)"""
+                     sector: str, x: int, y: int,
+                     font) -> tuple[int, int]:
+    """태그를 그리고 (너비, 높이) 반환. 섹터 없으면 (0, 0)"""
     if not sector or sector in ("기타", ""):
         return 0, 0
     text = f" {sector} "
-    try:
-        tw = int(font.getlength(text))
-    except Exception:
-        tw = len(text) * 18
-    th = font.size if hasattr(font, "size") else 30
-    bw, bh = tw + 28, th + 18
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw   = int(bbox[2] - bbox[0])
+    th   = int(bbox[3] - bbox[1])
+    px, py = 14, 8
+    bw = tw + px * 2
+    bh = th + py * 2
     draw.rounded_rectangle(
         [x, y, x + bw, y + bh],
-        radius=8, fill=COLOR_TAG_BG, outline=COLOR_TAG_BD, width=2,
+        radius=8, fill=TAG_BG, outline=TAG_BORDER, width=2,
     )
-    draw.text((x + 14, y + 9), text, font=font, fill=COLOR_TAG_FG)
+    draw.text((x + px, y + py), text, font=font, fill=TAG_FG)
     return bw, bh
 
 
-# ── 도입부 / 마무리 ───────────────────────────────────
+# ════════════════════════════════════════════════════
+#  도입부 / 마무리
+# ════════════════════════════════════════════════════
 def _date_overlay(bg_path: str, date: str, out_path: Path) -> Path:
     img  = _load_bg(bg_path)
     draw = ImageDraw.Draw(img)
-    font = _font(56, bold=True)
+    font = _font(54, bold=True)
     date_fmt = datetime.strptime(date, "%Y%m%d").strftime("%Y. %m. %d")
     _draw_center_x(draw, date_fmt, int(H * 0.88), font, COLOR_WHITE)
     img.save(out_path, quality=95)
@@ -204,14 +239,16 @@ def gen_outro(date: str, out_path: Path) -> Path:
     return _date_overlay(config.OUTRO_BG, date, out_path)
 
 
-# ── 리스트 카드 ───────────────────────────────────────
+# ════════════════════════════════════════════════════
+#  리스트 카드 (카드형 UI)
+# ════════════════════════════════════════════════════
 def gen_list_card(is_gainer: bool, stocks: list[dict],
                   caption: str, out_path: Path) -> Path:
     """
-    3종목 리스트.
-    - TOP 뱃지: 행 좌상단
-    - 종목명 / 섹터: 왼쪽 정렬 (LPAD에서 시작), 행 내 수직 중앙
-    - 등락률 / 종가: 오른쪽 정렬 (RPAD에서 끝), 행 내 수직 중앙
+    각 종목을 독립된 rounded_rectangle 카드 안에 배치.
+    카드 내 레이아웃:
+      좌측: TOP 뱃지(상단) / 종목명(중앙) / 섹터 태그(하단)
+      우측: 등락률(상단) / 종가(하단)
     """
     bg    = config.GAINER_BG if is_gainer else config.LOSER_BG
     color = COLOR_RISE if is_gainer else COLOR_FALL
@@ -222,26 +259,30 @@ def gen_list_card(is_gainer: bool, stocks: list[dict],
     _draw_caption(draw, caption)
 
     media_h  = M_BOT - M_TOP
-    row_h    = media_h // 3
+    n_stocks = min(len(stocks), 3)
+    gap      = 20   # 카드 간 간격
+    card_h   = int((media_h - gap * (n_stocks - 1)) / n_stocks) - 20
+    card_x0  = LPAD
+    card_x1  = W - LPAD
 
-    f_badge  = _font(26, bold=True)
-    f_name   = _font(56, bold=True)
-    f_pct    = _font(62, bold=True)
-    f_close  = _font(34)
-    f_sector = _font(30, bold=True)
+    f_badge  = _font(24, bold=True)
+    f_name   = _font(55, bold=True)
+    f_pct    = _font(60, bold=True)
+    f_close  = _font(32)
+    f_sector = _font(28, bold=True)
 
     for i, s in enumerate(stocks[:3]):
-        ry0 = M_TOP + i * row_h
-        ry1 = ry0 + row_h
+        cy0 = int(M_TOP + i * (card_h + gap)) + 20
+        cy1 = cy0 + card_h
 
-        # 행 배경
-        overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        ov_draw = ImageDraw.Draw(overlay)
-        row_col = (30, 30, 30, 200) if i % 2 == 0 else (20, 20, 20, 200)
-        ov_draw.rectangle([LPAD - 20, ry0 + 3, W - RPAD + 20, ry1 - 3],
-                          fill=row_col)
-        img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
-        draw = ImageDraw.Draw(img)
+        # ── 카드 배경 (rounded_rectangle) ──
+        draw.rounded_rectangle(
+            [card_x0, cy0, card_x1, cy1],
+            radius=CARD_RADIUS,
+            fill=CARD_BG,
+            outline=CARD_BORDER,
+            width=1,
+        )
 
         name   = s.get("name",   "")
         sector = s.get("sector", "")
@@ -249,69 +290,71 @@ def gen_list_card(is_gainer: bool, stocks: list[dict],
         close  = s.get("close",  0)
         sign   = "+" if change >= 0 else ""
 
-        # ── TOP 뱃지 (좌상단 고정) ──
+        inner_x0 = card_x0 + CARD_PAD
+        inner_x1 = card_x1 - CARD_PAD
+
+        # ── TOP 뱃지 (카드 좌측 상단) ──
         badge_text = f"TOP {i + 1}"
-        bb  = draw.textbbox((0, 0), badge_text, font=f_badge)
-        bw  = bb[2] - bb[0] + 24
-        bh_badge = bb[3] - bb[1] + 12
+        bbox_b = draw.textbbox((0, 0), badge_text, font=f_badge)
+        bw = int(bbox_b[2] - bbox_b[0]) + 20
+        bh = int(bbox_b[3] - bbox_b[1]) + 10
+        bx0 = inner_x0
+        by0 = cy0 + 25
         draw.rounded_rectangle(
-            [LPAD, ry0 + 10, LPAD + bw, ry0 + 10 + bh_badge],
-            radius=6, fill=color
+            [bx0, by0, bx0 + bw, by0 + bh],
+            radius=6, fill=color,
         )
-        draw.text((LPAD + 12, ry0 + 16), badge_text,
-                  font=f_badge, fill=COLOR_WHITE)
+        draw.text(
+            (bx0 + 10, by0 + 5),
+            badge_text, font=f_badge, fill=COLOR_WHITE,
+        )
 
-        # ── 왼쪽 블록 높이 계산 (수직 중앙 정렬) ──
-        name_h  = _th(draw, name, f_name)
-        _, sec_h = _draw_sector_tag.__wrapped__(sector, f_sector) \
-            if hasattr(_draw_sector_tag, "__wrapped__") else \
-            (0, (f_sector.size + 18) if sector and sector not in ("기타", "") else 0)
-
-        # 섹터 높이 직접 계산
+        # ── 종목명 수직 중앙 계산 ──
+        bbox_n  = draw.textbbox((0, 0), name, font=f_name)
+        name_h  = int(bbox_n[3] - bbox_n[1])
+        sec_h = 0
         if sector and sector not in ("기타", ""):
-            sec_h = f_sector.size + 18
-        else:
-            sec_h = 0
-
-        gap     = 10
-        block_h = name_h + (sec_h + gap if sec_h else 0)
-        content_y0 = ry0 + (row_h - block_h) // 2
-
-        # ── 종목명 (왼쪽 정렬, 수직 중앙) ──
-        draw.text((LPAD, content_y0), name, font=f_name, fill=COLOR_WHITE)
-
-        # ── 섹터 태그 (왼쪽 정렬, 종목명 아래) ──
-        if sec_h:
-            _draw_sector_tag(draw, sector, f_sector,
-                             LPAD, content_y0 + name_h + gap)
-
-        # ── 등락률 (오른쪽 정렬, 수직 중앙) ──
+            bbox_s = draw.textbbox((0, 0), f" {sector} ", font=f_sector)
+            sec_h  = int(bbox_s[3] - bbox_s[1]) + 18  # bh
+        gap_ns  = 10
+        block_h = name_h + (sec_h + gap_ns if sec_h else 0)
+        name_y  = int(cy0 + (card_h - block_h) // 2)
+        
+        # ── 등락률 (카드 우측 상단) ──
         pct_text = f"{sign}{change}%"
-        pct_h    = _th(draw, pct_text, f_pct)
-        close_h  = _th(draw, f"{close:,}원", f_close)
-        right_block_h = pct_h + gap + close_h
-        right_y0 = ry0 + (row_h - right_block_h) // 2
+        bbox_p   = draw.textbbox((0, 0), pct_text, font=f_pct)
+        pct_w    = int(bbox_p[2] - bbox_p[0])
+        pct_h    = int(bbox_p[3] - bbox_p[1])
+        pct_x    = int(inner_x1 - pct_w)
+        pct_y    = int(cy0 + (card_h - block_h) // 2)
+        draw.text((pct_x, pct_y), pct_text, font=f_pct, fill=color)
 
-        tw_pct = _tw(draw, pct_text, f_pct)
-        draw.text((W - RPAD - tw_pct, right_y0),
-                  pct_text, font=f_pct, fill=color)
-
-        # ── 종가 (오른쪽 정렬, 등락률 아래) ──
+        # ── 종가 (등락률 아래, 우측) ──
         close_text = f"{close:,}원"
-        tw_close   = _tw(draw, close_text, f_close)
-        draw.text((W - RPAD - tw_close, right_y0 + pct_h + gap),
-                  close_text, font=f_close, fill=COLOR_DARK)
+        bbox_c     = draw.textbbox((0, 0), close_text, font=f_close)
+        close_w    = int(bbox_c[2] - bbox_c[0])
+        close_x    = int(inner_x1 - close_w)
+        close_y    = pct_y + pct_h + 9
+        draw.text((close_x, close_y), close_text, font=f_close, fill=COLOR_DARK)
 
-        # 행 구분선
-        if i < 2:
-            draw.line([(LPAD - 20, ry1 - 1), (W - RPAD + 20, ry1 - 1)],
-                      fill="#333333", width=1)
+        # ── 종목명 (좌측, 수직 중앙) ──
+        draw.text((inner_x0, name_y), name, font=f_name, fill=COLOR_WHITE)
+
+        # ── 섹터 태그 (종목명 아래) ──
+        if sector and sector not in ("기타", ""):
+            _draw_sector_tag(
+                draw, sector,
+                inner_x0, name_y + name_h + gap_ns + 10,
+                f_sector,
+            )
 
     img.save(out_path, quality=95)
     return out_path
 
 
-# ── 개별 종목 차트 카드 ───────────────────────────────
+# ════════════════════════════════════════════════════
+#  개별 종목 차트 카드
+# ════════════════════════════════════════════════════
 def gen_chart_card(is_gainer: bool, stock_info: dict,
                    caption: str, chart_data: pd.DataFrame | None,
                    out_path: Path) -> Path:
@@ -323,9 +366,9 @@ def gen_chart_card(is_gainer: bool, stock_info: dict,
 
     chart_img = _render_chart(stock_info, chart_data, is_gainer)
     mw = W - LPAD * 2
-    mh = M_BOT - M_TOP
+    mh = M_BOT - M_TOP - 20
     chart_img = chart_img.resize((mw, mh), Image.LANCZOS)
-    img.paste(chart_img, (LPAD, M_TOP))
+    img.paste(chart_img, (LPAD, M_TOP + 30))
 
     img.save(out_path, quality=95)
     return out_path

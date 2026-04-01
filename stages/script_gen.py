@@ -1,8 +1,15 @@
 """
 스크립트 JSON 생성
-- 수동 모드: generate_script_template() → JSON 템플릿 파일 생성
-- AI 자동 모드: generate_script_ai()
-- 공통: load_script(), validate_script()
+
+구조 변경:
+- 인트로/아웃트로 고정 (AI 생성 불필요)
+- AI는 KOSPI/KOSDAQ 두 영상의 종목 캡션+이유만 한 번에 생성
+- 출력: script.json 하나에 kospi/kosdaq 두 섹션 포함
+
+고정 멘트:
+  intro_kospi  : "긴 말 안 한다! 어제 코스피 급등급락, 딱 30초 컷으로 보고 가!"
+  intro_kosdaq : "긴 말 안 한다! 어제 코스닥 급등급락, 딱 30초 컷으로 보고 가!"
+  outro        : "내일 아침 7시, 다음 급등주 놓치기 싫으면 구독!"
 """
 from __future__ import annotations
 
@@ -12,195 +19,209 @@ from pathlib import Path
 
 import config
 
-# ── 필수 키 정의 ─────────────────────────────────────
-# 각 항목 키: (타입, 필수 서브키 목록)
-REQUIRED_KEYS: dict[str, type] = {
-    "intro":               str,
-    "gainer_list_caption": str,
-    "gainer_a":            dict,
-    "gainer_b":            dict,
-    "gainer_c":            dict,
-    "loser_list_caption":  str,
-    "loser_a":             dict,
-    "loser_b":             dict,
-    "loser_c":             dict,
-    "outro":               str,
+# ── 고정 멘트 ────────────────────────────────────────
+FIXED_INTRO = {
+    "KOSPI":  "긴 말 안 한다! 어제 코스피 급등급락, 딱 30초 컷으로 보고 가!",
+    "KOSDAQ": "긴 말 안 한다! 어제 코스닥 급등급락, 딱 30초 컷으로 보고 가!",
 }
+FIXED_OUTRO = "내일 아침 7시, 다음 급등주 놓치기 싫으면 구독!"
+
+# ── 필수 키 (시장별 섹션 내부) ───────────────────────
 STOCK_SUBKEYS = ["name", "sector", "change", "reason"]
 
+SECTION_REQUIRED: dict[str, type] = {
+    "gainer_list_caption": str,
+    "gainer_a": dict,
+    "gainer_b": dict,
+    "gainer_c": dict,
+    "loser_list_caption": str,
+    "loser_a": dict,
+    "loser_b": dict,
+    "loser_c": dict,
+}
 
-# ── 구조 검증 ────────────────────────────────────────
-def validate_script(data: dict) -> tuple[bool, list[str]]:
-    """
-    필수 키와 타입을 검사.
-    반환: (통과 여부, 오류 메시지 목록)
-    """
+
+def validate_section(data: dict, label: str = "") -> tuple[bool, list[str]]:
     errors = []
+    prefix = f"[{label}] " if label else ""
 
-    # _로 시작하는 메모 키 제거 후 검사
-    clean = {k: v for k, v in data.items() if not k.startswith("_")}
-
-    for key, expected_type in REQUIRED_KEYS.items():
-        if key not in clean:
-            errors.append(f"누락된 키: '{key}'")
+    for key, expected_type in SECTION_REQUIRED.items():
+        if key not in data:
+            errors.append(f"{prefix}누락된 키: '{key}'")
             continue
-
-        val = clean[key]
-
+        val = data[key]
         if not isinstance(val, expected_type):
-            errors.append(
-                f"'{key}' 타입 오류: {type(val).__name__} (기대: {expected_type.__name__})"
-            )
+            errors.append(f"{prefix}'{key}' 타입 오류")
             continue
-
-        # 종목 dict 서브키 검사
         if expected_type is dict:
             for sub in STOCK_SUBKEYS:
                 if sub not in val:
-                    errors.append(f"'{key}.{sub}' 누락")
-                elif not isinstance(val[sub], str):
-                    errors.append(f"'{key}.{sub}' 타입 오류 (str이어야 함)")
+                    errors.append(f"{prefix}'{key}.{sub}' 누락")
+        if expected_type is str and not val.strip():
+            errors.append(f"{prefix}'{key}' 값이 비어 있음")
 
-        # 빈 문자열 경고
-        if expected_type is str and val.strip() == "":
-            errors.append(f"'{key}' 값이 비어 있음")
-
-    return (len(errors) == 0), errors
+    return len(errors) == 0, errors
 
 
-# ── 공통 프롬프트 텍스트 ─────────────────────────────
-_SYSTEM_PROMPT = """당신은 주식 시황을 소개하는 유튜브 쇼츠 스크립트 작가입니다.
+def validate_script(data: dict) -> tuple[bool, list[str]]:
+    """전체 script.json 검증 (kospi + kosdaq 두 섹션)"""
+    errors = []
+    clean  = {k: v for k, v in data.items() if not k.startswith("_")}
+
+    for market in ("kospi", "kosdaq"):
+        if market not in clean:
+            errors.append(f"최상위 키 '{market}' 누락")
+            continue
+        ok, errs = validate_section(clean[market], market.upper())
+        errors.extend(errs)
+
+    return len(errors) == 0, errors
+
+
+# ── 시스템 프롬프트 ──────────────────────────────────
+_SYSTEM_PROMPT = """당신은 주식 시황 유튜브 쇼츠 스크립트 작가입니다.
 
 [말투 규칙]
-- 경어체 유지 (합니다/습니다 기반)
-- 문장은 짧고 리듬감 있게 끊기
-- "살펴보겠습니다" 대신 "알아볼게요", "확인해볼게요" 사용
-- 수치는 문장 앞에 배치해서 강조
-- 마무리는 반드시 "어제 시황 여기까지고요, 오늘도 좋은 투자 되세요!" 스타일로
-
-[추론 규칙]
-- 급등/급락 이유: 섹터 동향, 최근 이슈, 시장 분위기를 근거로 추론
-- 섹터: 종목명을 보고 판단 (예: 삼성전자→반도체, 현대차→자동차)
-- 불확실하면 "~로 보여요", "~영향을 받은 것으로 보여요" 사용
+- 경어체 유지, 문장 짧고 리듬감 있게
+- "살펴보겠습니다" 대신 "알아볼게요"
 - reason은 반드시 30자 이내 한 문장
+- 섹터: 종목명 보고 직접 판단 (삼성전자→반도체, 현대차→자동차 등)
+- 불확실하면 "~로 보여요" 사용
 
-[출력 규칙 — 반드시 준수]
-- 반드시 아래 JSON 형식 그대로 출력
-- 키 이름 변경 금지, 키 추가/삭제 금지
-- 마크다운 코드블록(```json ```) 사용 금지
-- 설명 텍스트, 주석, 안내문 출력 금지
-- 오직 JSON 객체만 출력
+[출력 규칙]
+- 반드시 아래 JSON 구조 그대로 출력
+- 키 이름/구조/순서 변경 금지, 추가/삭제 금지
+- 마크다운 코드블록 사용 금지
+- JSON 객체만 출력 (설명 텍스트 금지)
 
 출력 형식:
 {
-  "intro": "...",
-  "gainer_list_caption": "...",
-  "gainer_a": {"name": "종목명", "sector": "섹터명", "change": "+X.X%", "reason": "..."},
-  "gainer_b": {"name": "종목명", "sector": "섹터명", "change": "+X.X%", "reason": "..."},
-  "gainer_c": {"name": "종목명", "sector": "섹터명", "change": "+X.X%", "reason": "..."},
-  "loser_list_caption": "...",
-  "loser_a": {"name": "종목명", "sector": "섹터명", "change": "-X.X%", "reason": "..."},
-  "loser_b": {"name": "종목명", "sector": "섹터명", "change": "-X.X%", "reason": "..."},
-  "loser_c": {"name": "종목명", "sector": "섹터명", "change": "-X.X%", "reason": "..."},
-  "outro": "..."
+  "kospi": {
+    "gainer_list_caption": "...",
+    "gainer_a": {"name": "종목명", "sector": "섹터", "change": "+X.X%", "reason": "..."},
+    "gainer_b": {"name": "종목명", "sector": "섹터", "change": "+X.X%", "reason": "..."},
+    "gainer_c": {"name": "종목명", "sector": "섹터", "change": "+X.X%", "reason": "..."},
+    "loser_list_caption": "...",
+    "loser_a": {"name": "종목명", "sector": "섹터", "change": "-X.X%", "reason": "..."},
+    "loser_b": {"name": "종목명", "sector": "섹터", "change": "-X.X%", "reason": "..."},
+    "loser_c": {"name": "종목명", "sector": "섹터", "change": "-X.X%", "reason": "..."}
+  },
+  "kosdaq": {
+    "gainer_list_caption": "...",
+    "gainer_a": {"name": "종목명", "sector": "섹터", "change": "+X.X%", "reason": "..."},
+    "gainer_b": {"name": "종목명", "sector": "섹터", "change": "+X.X%", "reason": "..."},
+    "gainer_c": {"name": "종목명", "sector": "섹터", "change": "+X.X%", "reason": "..."},
+    "loser_list_caption": "...",
+    "loser_a": {"name": "종목명", "sector": "섹터", "change": "-X.X%", "reason": "..."},
+    "loser_b": {"name": "종목명", "sector": "섹터", "change": "-X.X%", "reason": "..."},
+    "loser_c": {"name": "종목명", "sector": "섹터", "change": "-X.X%", "reason": "..."}
+  }
 }"""
 
 
-def _build_user_prompt(date: str, market_summary: dict, movers: dict) -> str:
+def _build_user_prompt(date: str, market_summary: dict,
+                       kospi_movers: dict, kosdaq_movers: dict) -> str:
     date_fmt = datetime.strptime(date, "%Y%m%d").strftime("%Y년 %m월 %d일")
 
     def sign(v):
         return f"+{v}" if v >= 0 else str(v)
 
-    g_lines = "\n".join(
-        f"- {g['name']} (티커:{g['ticker']}): {sign(g['change'])}%, 종가 {g['close']:,}원"
-        for g in movers["gainers"]
-    )
-    l_lines = "\n".join(
-        f"- {l['name']} (티커:{l['ticker']}): {l['change']}%, 종가 {l['close']:,}원"
-        for l in movers["losers"]
-    )
+    def fmt_movers(movers: dict) -> str:
+        g = "\n".join(
+            f"  - {s['name']} (티커:{s['ticker']}): {sign(s['change'])}%, 종가 {s['close']:,}원"
+            for s in movers["gainers"]
+        )
+        l = "\n".join(
+            f"  - {s['name']} (티커:{s['ticker']}): {s['change']}%, 종가 {s['close']:,}원"
+            for s in movers["losers"]
+        )
+        return f"급등:\n{g}\n급락:\n{l}"
 
     return f"""날짜: {date_fmt}
-시장 분위기: {market_summary['summary']}
+시장: {market_summary['summary']}
 
-[급등주 TOP3]
-{g_lines}
+[KOSPI]
+{fmt_movers(kospi_movers)}
 
-[급락주 TOP3]
-{l_lines}
+[KOSDAQ]
+{fmt_movers(kosdaq_movers)}
 
-위 데이터를 바탕으로 지정된 JSON 형식에 맞게 스크립트를 작성해주세요.
-각 종목의 sector는 종목명을 보고 직접 판단해 채워주세요."""
+위 데이터를 바탕으로 JSON 형식의 스크립트를 작성해주세요.
+각 종목의 sector는 종목명 보고 직접 판단해 채워주세요."""
 
 
-# ── AI 자동 모드 ─────────────────────────────────────
-def generate_script_ai(date: str, market_summary: dict, movers: dict) -> dict:
+# ── AI 자동 생성 ─────────────────────────────────────
+def generate_script_ai(date: str, market_summary: dict,
+                       kospi_movers: dict, kosdaq_movers: dict) -> dict:
     import anthropic
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
-    prompt = _build_user_prompt(date, market_summary, movers)
-
+    prompt = _build_user_prompt(date, market_summary, kospi_movers, kosdaq_movers)
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=1000,
+        max_tokens=2000,
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
     )
 
-    raw = response.content[0].text.strip()
-    raw = raw.replace("```json", "").replace("```", "").strip()
-
+    raw  = response.content[0].text.strip()
+    raw  = raw.replace("```json", "").replace("```", "").strip()
     data = json.loads(raw)
 
     ok, errors = validate_script(data)
     if not ok:
-        raise ValueError(f"AI 응답 구조 오류:\n" + "\n".join(errors))
+        raise ValueError("AI 응답 구조 오류:\n" + "\n".join(errors))
 
     return data
 
 
 # ── 수동 템플릿 생성 ─────────────────────────────────
 def generate_script_template(date: str, market_summary: dict,
-                              movers: dict, out_path: Path) -> Path:
+                              kospi_movers: dict, kosdaq_movers: dict,
+                              out_path: Path) -> Path:
     def sign(v):
         return f"+{v}" if v >= 0 else str(v)
 
     def stock_entry(s: dict) -> dict:
         return {
             "name":   s["name"],
-            "sector": "",       # AI가 채울 필드
+            "sector": "",
             "change": f"{sign(s['change'])}%",
-            "reason": "",       # AI가 채울 필드
+            "reason": "",
         }
+
+    def section(movers: dict) -> dict:
+        return {
+            "gainer_list_caption": "",
+            "gainer_a": stock_entry(movers["gainers"][0]),
+            "gainer_b": stock_entry(movers["gainers"][1]),
+            "gainer_c": stock_entry(movers["gainers"][2]),
+            "loser_list_caption":  "",
+            "loser_a": stock_entry(movers["losers"][0]),
+            "loser_b": stock_entry(movers["losers"][1]),
+            "loser_c": stock_entry(movers["losers"][2]),
+        }
+
+    def ref_lines(movers: dict, label: str) -> list[str]:
+        lines = []
+        for s in movers["gainers"]:
+            lines.append(f"  급등 {s['name']} ({s['ticker']}) {sign(s['change'])}% {s['close']:,}원")
+        for s in movers["losers"]:
+            lines.append(f"  급락 {s['name']} ({s['ticker']}) {s['change']}% {s['close']:,}원")
+        return lines
 
     template = {
         "_안내": [
-            "아래 JSON에서 빈 문자열(\"\")만 채워주세요.",
-            "키 이름, 구조, 순서를 절대 변경하지 마세요.",
-            "마크다운이나 설명 없이 JSON만 출력해주세요.",
+            "빈 문자열(\"\")만 채워주세요.",
+            "키 이름/구조/순서 변경 금지.",
+            "JSON만 출력 (마크다운/설명 금지).",
         ],
-        "_날짜":   datetime.strptime(date, "%Y%m%d").strftime("%Y년 %m월 %d일"),
-        "_시장":   market_summary["summary"],
-        "_급등_참고": [
-            f"{g['name']} (티커:{g['ticker']}) {sign(g['change'])}% 종가:{g['close']:,}원"
-            for g in movers["gainers"]
-        ],
-        "_급락_참고": [
-            f"{l['name']} (티커:{l['ticker']}) {l['change']}% 종가:{l['close']:,}원"
-            for l in movers["losers"]
-        ],
-
-        "intro":               "",
-        "gainer_list_caption": "",
-        "gainer_a": stock_entry(movers["gainers"][0]),
-        "gainer_b": stock_entry(movers["gainers"][1]),
-        "gainer_c": stock_entry(movers["gainers"][2]),
-        "loser_list_caption":  "",
-        "loser_a": stock_entry(movers["losers"][0]),
-        "loser_b": stock_entry(movers["losers"][1]),
-        "loser_c": stock_entry(movers["losers"][2]),
-        "outro":               "",
+        "_날짜":          datetime.strptime(date, "%Y%m%d").strftime("%Y년 %m월 %d일"),
+        "_시장":          market_summary["summary"],
+        "_KOSPI_참고":    ref_lines(kospi_movers,  "KOSPI"),
+        "_KOSDAQ_참고":   ref_lines(kosdaq_movers, "KOSDAQ"),
+        "kospi":          section(kospi_movers),
+        "kosdaq":         section(kosdaq_movers),
     }
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -211,25 +232,21 @@ def generate_script_template(date: str, market_summary: dict,
 
 
 def _build_web_prompt(out_path: Path) -> str:
-    """웹 AI에 붙여넣을 프롬프트 생성"""
     with open(out_path, encoding="utf-8") as f:
         content = f.read()
-
     return f"""{_SYSTEM_PROMPT}
 
-아래 JSON 파일에서 빈 문자열("")로 표시된 필드만 채워주세요.
-_로 시작하는 키는 참고용이므로 출력에 포함하지 마세요.
-반드시 빈 문자열이 있는 키만 채우고, 나머지 구조는 그대로 유지하세요.
+아래 JSON에서 빈 문자열("")만 채워주세요.
+_로 시작하는 키는 참고용 — 출력에 포함하지 마세요.
 
 {content}"""
 
 
-# ── 스크립트 로드 + 검증 ─────────────────────────────
+# ── 로드 + 검증 ──────────────────────────────────────
 def load_script(path: Path) -> dict:
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
 
-    # _로 시작하는 메모 키 제거
     clean = {k: v for k, v in data.items() if not k.startswith("_")}
 
     ok, errors = validate_script(clean)
@@ -237,7 +254,26 @@ def load_script(path: Path) -> dict:
         print("\n  ⚠️  script.json 구조 오류:")
         for e in errors:
             print(f"     - {e}")
-        print("  스크립트를 수정한 뒤 다시 실행해주세요.\n")
         raise ValueError("script.json 구조 오류")
 
     return clean
+
+
+def get_market_script(script: dict, market: str) -> dict:
+    """
+    전체 script에서 특정 시장 섹션 추출.
+    인트로/아웃트로는 고정 멘트로 주입.
+    """
+    section = script[market.lower()]
+    return {
+        "intro":               FIXED_INTRO[market.upper()],
+        "gainer_list_caption": section["gainer_list_caption"],
+        "gainer_a":            section["gainer_a"],
+        "gainer_b":            section["gainer_b"],
+        "gainer_c":            section["gainer_c"],
+        "loser_list_caption":  section["loser_list_caption"],
+        "loser_a":             section["loser_a"],
+        "loser_b":             section["loser_b"],
+        "loser_c":             section["loser_c"],
+        "outro":               FIXED_OUTRO,
+    }

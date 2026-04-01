@@ -1,17 +1,15 @@
 """
 1단계: 네이버 금융 크롤링으로 급등/급락 TOP N 수집
 
-참조 URL:
-  급등: https://finance.naver.com/sise/sise_rise.naver
-  급락: https://finance.naver.com/sise/sise_fall.naver
-  지수: https://polling.finance.naver.com/api/realtime?query=SERVICE_INDEX:KOSPI
+KOSPI / KOSDAQ 별도 페이지 URL:
+  코스피 급등: https://finance.naver.com/sise/sise_rise.naver?sosok=0
+  코스피 급락: https://finance.naver.com/sise/sise_fall.naver?sosok=0
+  코스닥 급등: https://finance.naver.com/sise/sise_rise.naver?sosok=1
+  코스닥 급락: https://finance.naver.com/sise/sise_fall.naver?sosok=1
+  지수:        https://polling.finance.naver.com/api/realtime?query=SERVICE_INDEX:KOSPI
 
-컬럼 구조 (debug_naver.py 확인):
-  cols[1] = 종목명
-  cols[2] = 현재가
-  cols[4] = 등락률 (+22.58%)
-
-섹터는 크롤링하지 않음 → script_gen.py에서 AI가 추론
+컬럼 구조:
+  cols[1] = 종목명, cols[2] = 현재가, cols[4] = 등락률
 """
 from __future__ import annotations
 
@@ -38,13 +36,15 @@ HEADERS = {
 SESSION = requests.Session()
 SESSION.headers.update(HEADERS)
 
-# ETN/레버리지/인버스 필터
 EXCLUDE_KEYWORDS = [
     "ETN", "ETF", "레버리지", "인버스", "2X", "선물",
     "KODEX", "TIGER", "KBSTAR", "ARIRANG", "HANARO",
     "KOSEF", "FOCUS", "SOL", "ACE", "TIMEFOLIO",
     "TR ETN", "TOP5", "TOP10",
 ]
+
+# 네이버 금융 sosok 코드
+MARKET_SOSOK = {"KOSPI": "0", "KOSDAQ": "1"}
 
 
 def _is_excluded(name: str) -> bool:
@@ -92,14 +92,18 @@ def get_market_summary(date: str) -> dict:
     }
 
 
-def _parse_movers_page(url: str, is_gainer: bool, top_n: int) -> list[dict]:
+def _parse_movers_page(base_url: str, sosok: str,
+                       is_gainer: bool, top_n: int) -> list[dict]:
+    """
+    sosok=0: KOSPI, sosok=1: KOSDAQ
+    """
     results = []
     page    = 1
 
     while len(results) < top_n:
         try:
-            paged_url = f"{url}?page={page}"
-            resp = SESSION.get(paged_url, timeout=10)
+            url  = f"{base_url}?sosok={sosok}&page={page}"
+            resp = SESSION.get(url, timeout=10)
             resp.encoding = "euc-kr"
             soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -138,8 +142,7 @@ def _parse_movers_page(url: str, is_gainer: bool, top_n: int) -> list[dict]:
                     "name":   name,
                     "change": round(change, 2),
                     "close":  int(close_text),
-                    # sector는 AI가 채움 — 여기서는 빈 값
-                    "sector": "",
+                    "sector": "",   # AI가 채움
                 })
                 found_this_page += 1
 
@@ -151,23 +154,30 @@ def _parse_movers_page(url: str, is_gainer: bool, top_n: int) -> list[dict]:
             page += 1
 
         except Exception as e:
-            print(f"   [market_data] 크롤링 오류 ({url} p{page}): {e}")
+            print(f"   [market_data] 크롤링 오류 (p{page}): {e}")
             break
 
     return results[:top_n]
 
 
-def get_top_movers(date: str) -> dict:
+def get_top_movers(date: str, market: str = "KOSPI") -> dict:
+    """
+    market: "KOSPI" 또는 "KOSDAQ"
+    반환: {"gainers": [...], "losers": [...]}
+    """
+    sosok = MARKET_SOSOK.get(market.upper(), "0")
     top_n = config.TOP_N
 
-    print("   급등주 크롤링...")
+    print(f"   [{market}] 급등주 크롤링...")
     gainers = _parse_movers_page(
-        "https://finance.naver.com/sise/sise_rise.naver", True, top_n
+        "https://finance.naver.com/sise/sise_rise.naver",
+        sosok, True, top_n,
     )
 
-    print("   급락주 크롤링...")
+    print(f"   [{market}] 급락주 크롤링...")
     losers = _parse_movers_page(
-        "https://finance.naver.com/sise/sise_fall.naver", False, top_n
+        "https://finance.naver.com/sise/sise_fall.naver",
+        sosok, False, top_n,
     )
 
     return {"gainers": gainers, "losers": losers}
@@ -176,7 +186,7 @@ def get_top_movers(date: str) -> dict:
 def get_chart_data(ticker: str, date: str):
     try:
         start = (
-            datetime.strptime(date, "%Y%m%d") - timedelta(days=30)
+            datetime.strptime(date, "%Y%m%d") - timedelta(days=14)
         ).strftime("%Y%m%d")
         df = stock.get_market_ohlcv_by_date(start, date, ticker)
         return df if (df is not None and not df.empty) else None

@@ -134,13 +134,30 @@ def cleanup_intermediate(work_dir: Path) -> None:
     print("   중간 파일 정리 완료")
 
 
+def make_title(date: str, market: str) -> str:
+    """
+    영상 제목: "260401 코스피 급등급낙"
+    date   : "20260401" 형식
+    market : "kospi" 또는 "kosdaq"
+    """
+    short_date = date[2:]
+    market_kr  = "코스피" if market.lower() == "kospi" else "코스닥"
+    return f"{short_date} {market_kr} 급등급낙"
+
+
 def build_video(clips: list[Path], bgm_path: Optional[Path],
-                date: str, work_dir: Path) -> Path:
+                date: str, work_dir: Path,
+                market: str = "kospi") -> Path:
+    """
+    date  : "20260401"
+    market: "kospi" 또는 "kosdaq"
+    최종 파일명: "260401 코스피 급등급낙.mp4"
+    """
     print("   클립 합치는 중...")
     concat_out = work_dir / "concat.mp4"
     concat_clips(clips, concat_out)
 
-    print(f"   {config.SPEED}배속 처리 중...")
+    print(f"   {config.SPEED}배속 체리 중...")
     sped_out = work_dir / "sped.mp4"
     apply_speed(concat_out, sped_out)
 
@@ -151,10 +168,12 @@ def build_video(clips: list[Path], bgm_path: Optional[Path],
         bgm_out = work_dir / "with_bgm.mp4"
         current = mix_bgm(current, bgm_path, bgm_out)
 
-    final = work_dir / f"shorts_{date}.mp4"
+    title = make_title(date, market)
+    final = work_dir / f"{title}.mp4"
     shutil.copy2(str(current), str(final))
 
     print("   중간 파일 정리 중...")
     cleanup_intermediate(work_dir)
 
+    print(f"   제목: {title}")
     return final

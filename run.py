@@ -303,7 +303,7 @@ def stage_video(date: str, market: str | None = None):
             clips.append(clip_out)
 
         bgm   = Path(config.BGM_PATH)
-        final = build_video(clips, bgm, f"{date}_{mkt}", mkt_d)
+        final = build_video(clips, bgm, date, mkt_d, market=mkt)
         print(f"\n  ✅ [{mkt.upper()}] 완료: {final}")
 
 

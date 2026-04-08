@@ -1,11 +1,13 @@
 """
-4단계: gTTS로 음성 생성 후 WAV로 변환
+4단계: gTTS로 음성 생성 후 WAV(PCM)로 변환
 
-변경사항:
-- gainer_list_caption / loser_list_caption 앞에
-  "급등 내용입니다" / "급락 내용입니다" 안내 WAV 자동 추가
-- gTTS 오류 시 최대 5회 재시도 (간격: 2초씩 증가)
-- MP3 → WAV 변환으로 ffprobe duration 정확도 보장
+WAV 사용 이유:
+  PCM 헤더에 샘플 수가 정확히 기록됨 → ffprobe duration 오차 없음
+  → video_build.py의 -shortest 플래그와 결합해 정확한 싱크 보장
+
+무음 처리:
+  gTTS 앞뒤 무음은 그대로 유지 (자연스러운 호흡감)
+  싱크는 -shortest 플래그로 WAV 끝 시점에 정확히 맞춤
 """
 from __future__ import annotations
 
@@ -25,15 +27,14 @@ SEGMENT_KEYS = [
     "outro",
 ]
 
-ANNOUNCE_TEXTS = {
-    "gainer_announce": "급등 내용입니다.",
-    "loser_announce":  "급락 내용입니다.",
-}
-
-# announce 세그먼트는 이미지 없음 → 해당 리스트 이미지를 재사용
 ANNOUNCE_IMAGE_MAP = {
     "gainer_announce": "gainer_list_caption",
     "loser_announce":  "loser_list_caption",
+}
+
+ANNOUNCE_TEXTS = {
+    "gainer_announce": "급등 내용입니다.",
+    "loser_announce":  "급락 내용입니다.",
 }
 
 STOCK_KEYS = {"gainer_a", "gainer_b", "gainer_c",
@@ -56,19 +57,27 @@ def _extract_tts_text(script: dict, key: str) -> str:
 
 
 def _mp3_to_wav(mp3_path: Path, wav_path: Path) -> Path:
+    """MP3 → WAV(PCM 16bit 44100Hz) 단순 변환. 무음 유지."""
     subprocess.run(
-        ["ffmpeg", "-y", "-i", str(mp3_path),
-         "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "1",
-         str(wav_path)],
-        capture_output=True, check=True,
+        [
+            "ffmpeg", "-y",
+            "-i", str(mp3_path),
+            "-acodec", "pcm_s16le",
+            "-ar",     "44100",
+            "-ac",     "1",
+            str(wav_path),
+        ],
+        capture_output=True,
+        check=True,
     )
     return wav_path
 
 
 def generate_tts(text: str, out_wav: Path, max_retries: int = 5) -> Path:
     out_wav.parent.mkdir(parents=True, exist_ok=True)
-    mp3_path = out_wav.with_suffix(".mp3")
+    mp3_path   = out_wav.with_suffix(".mp3")
     last_error = None
+
     for attempt in range(1, max_retries + 1):
         try:
             tts = gTTS(text=text, lang="ko", slow=False)
@@ -84,6 +93,7 @@ def generate_tts(text: str, out_wav: Path, max_retries: int = 5) -> Path:
             if attempt < max_retries:
                 print(f"      {wait}초 후 재시도...")
                 time.sleep(wait)
+
     raise RuntimeError(f"TTS 생성 실패 ({max_retries}회): {last_error}")
 
 
@@ -92,6 +102,7 @@ def generate_all_tts(script: dict, audio_dir: Path,
     audio_dir.mkdir(parents=True, exist_ok=True)
     audio_paths: dict[str, Path] = {}
     keys_to_generate = {only} if only else set(SEGMENT_KEYS)
+
     for idx, key in enumerate(SEGMENT_KEYS):
         out = audio_dir / f"{idx:02d}_{key}.wav"
         audio_paths[key] = out
@@ -103,4 +114,5 @@ def generate_all_tts(script: dict, audio_dir: Path,
             continue
         print(f"   TTS [{key}]: {text[:40]}...")
         generate_tts(text, out)
+
     return audio_paths

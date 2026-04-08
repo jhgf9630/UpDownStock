@@ -42,10 +42,11 @@ def get_duration(path: Path) -> float:
 def make_clip(image_path: Path, audio_path: Path, out_path: Path) -> Path:
     """
     이미지(정지) + 오디오(WAV) → 클립.
-    오디오 길이를 ffprobe로 정확히 측정 후 -t 로 지정.
-    WAV는 PCM이므로 duration이 항상 정확함.
+
+    -shortest 플래그: 오디오(WAV)가 끝나는 순간 정확히 클립 종료.
+    WAV는 PCM이므로 FFmpeg이 샘플 수를 정확히 알고 있음
+    → 누적 드리프트 없이 모든 세그먼트 싱크 보장.
     """
-    duration = get_duration(audio_path)
     _run([
         "ffmpeg", "-y",
         "-loop", "1", "-i", str(image_path),
@@ -53,7 +54,7 @@ def make_clip(image_path: Path, audio_path: Path, out_path: Path) -> Path:
         "-c:v", "libx264", "-tune", "stillimage",
         "-c:a", "aac", "-b:a", "128k",
         "-pix_fmt", "yuv420p",
-        "-t", str(duration),          # WAV 길이와 완전히 일치
+        "-shortest",                   # WAV 끝 = 클립 끝 (정확한 싱크)
         "-vf",
         f"scale={config.VIDEO_W}:{config.VIDEO_H}"
         ":force_original_aspect_ratio=decrease,"
@@ -136,13 +137,15 @@ def cleanup_intermediate(work_dir: Path) -> None:
 
 def make_title(date: str, market: str) -> str:
     """
-    영상 제목: "260401 코스피 급등급낙"
+    영상 제목: "260401 코스피 급등급락"
     date   : "20260401" 형식
     market : "kospi" 또는 "kosdaq"
     """
     short_date = date[2:]
-    market_kr  = "코스피" if market.lower() == "kospi" else "코스닥"
-    return f"{short_date} {market_kr} 급등급낙"
+    market_kr = {"kospi": "코스피", "kosdaq": "코스닥", "nasdaq": "나스닥"}.get(
+        market.lower(), market.upper()
+    )
+    return f"{short_date} {market_kr} 급등급락"
 
 
 def build_video(clips: list[Path], bgm_path: Optional[Path],
@@ -151,7 +154,7 @@ def build_video(clips: list[Path], bgm_path: Optional[Path],
     """
     date  : "20260401"
     market: "kospi" 또는 "kosdaq"
-    최종 파일명: "260401 코스피 급등급낙.mp4"
+    최종 파일명: "260401 코스피 급등급락.mp4"
     """
     print("   클립 합치는 중...")
     concat_out = work_dir / "concat.mp4"

@@ -22,3 +22,5 @@ assets/templates/*.png
 !assets/bgm/.gitkeep
 !assets/templates/.gitkeep
 !output/.gitkeep
+
+youtube_client_secret.json

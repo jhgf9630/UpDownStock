@@ -6,3 +6,11 @@ Pillow
 gtts
 requests
 beautifulsoup4
+yfinance
+openai
+schedule
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2
+google-genai
+playwright

@@ -252,12 +252,17 @@ def gen_announce_card(is_gainer: bool, out_path: Path) -> Path:
 
 def gen_intro(date: str, out_path: Path, market: str = "KOSPI") -> Path:
     """
-    market: "KOSPI" → kospi_intro_bg.jpg
-             "KOSDAQ" → kosdaq_intro_bg.jpg
+    market: "KOSPI"  → kospi_intro_bg.jpg
+            "KOSDAQ" → kosdaq_intro_bg.jpg
+            "NASDAQ" → nasdaq_intro_bg.jpg
     """
-    bg = (config.INTRO_BG_KOSDAQ
-          if market.upper() == "KOSDAQ"
-          else config.INTRO_BG_KOSPI)
+    mkt = market.upper()
+    if mkt == "KOSDAQ":
+        bg = config.INTRO_BG_KOSDAQ
+    elif mkt == "NASDAQ":
+        bg = config.INTRO_BG_NASDAQ
+    else:
+        bg = config.INTRO_BG_KOSPI
     return _date_overlay(bg, date, out_path)
  
  
@@ -356,7 +361,8 @@ def gen_list_card(is_gainer: bool, stocks: list[dict],
         draw.text((pct_x, pct_y), pct_text, font=f_pct, fill=color)
 
         # ── 종가 (등락률 아래, 우측) ──
-        close_text = f"{close:,}원"
+        close_text = (f"${close:.2f}" if isinstance(close, float)
+                      else f"{close:,}원")
         bbox_c     = draw.textbbox((0, 0), close_text, font=f_close)
         close_w    = int(bbox_c[2] - bbox_c[0])
         close_x    = int(inner_x1 - close_w)
@@ -364,7 +370,20 @@ def gen_list_card(is_gainer: bool, stocks: list[dict],
         draw.text((close_x, close_y), close_text, font=f_close, fill=COLOR_DARK)
 
         # ── 종목명 (좌측, 수직 중앙) ──
-        draw.text((inner_x0, name_y), name, font=f_name, fill=COLOR_WHITE)
+        # NASDAQ: close가 float이면 미국 종목 → 이름이 길 수 있으므로
+        # 등락률 영역(우측)을 침범하지 않도록 최대 너비를 제한해 절삭
+        _is_nasdaq_stock = isinstance(close, float)
+        if _is_nasdaq_stock:
+            _max_name_w = pct_x - inner_x0 - 16
+            _display_name = name
+            while (_text_w(draw, _display_name, f_name) > _max_name_w
+                   and len(_display_name) > 1):
+                _display_name = _display_name[:-1]
+            if _display_name != name:
+                _display_name = _display_name[:-1] + ".."
+            draw.text((inner_x0, name_y), _display_name, font=f_name, fill=COLOR_WHITE)
+        else:
+            draw.text((inner_x0, name_y), name, font=f_name, fill=COLOR_WHITE)
 
         # ── 섹터 태그 (종목명 아래) ──
         if sector and sector not in ("기타", ""):
@@ -458,7 +477,9 @@ def _render_chart(stock_info: dict,
         rng    = mx - mn if mx != mn else mx * 0.05
 
         for xi, val in zip(xs, close.values):
-            ax.annotate(f"{int(val):,}",
+            price_label = (f"${val:.2f}" if isinstance(close.iloc[0], float)
+                           else f"{int(val):,}")
+            ax.annotate(price_label,
                         xy=(xi, val), xytext=(0, 16),
                         textcoords="offset points",
                         ha="center", fontsize=14, color="#DDDDDD")
@@ -473,8 +494,13 @@ def _render_chart(stock_info: dict,
                 ha="center", va="center",
                 transform=ax.transAxes, fontsize=20)
 
+    _is_us = (chart_data is not None and not chart_data.empty
+              and "종가" in chart_data.columns
+              and isinstance(chart_data["종가"].iloc[0], float))
     ax.yaxis.set_major_formatter(
-        mticker.FuncFormatter(lambda v, _: f"{int(v):,}")
+        mticker.FuncFormatter(
+            lambda v, _: f"${v:.0f}" if _is_us else f"{int(v):,}"
+        )
     )
     ax.tick_params(axis="y", colors="#CCCCCC", labelsize=14)
     ax.tick_params(axis="x", colors="#CCCCCC", labelsize=16, length=0)

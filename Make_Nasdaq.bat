@@ -1,0 +1,1 @@
+python run.py --stage all --market nasdaq
